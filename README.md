@@ -12,7 +12,6 @@ Auf der [Release-Seite](https://github.com/DAHpublic/Rack-Planer/releases/latest
 |---|---|
 | `Rack-Planer_v<Version>.exe` | **Desktop-Version** für Windows – herunterladen und starten, keine Installation |
 | `Rack-Planer-Web_v<Version>.zip` | **Webversion** für die Synology (Web Station) oder jeden Webserver mit PHP 7.4+ – Anleitung: [`web/SYNOLOGY.md`](web/SYNOLOGY.md) |
-| `Rack-Planer-Web-portabel_v<Version>.zip` | **Webversion portabel** für Windows, PHP enthalten – entpacken, `Rack-Planer starten.bat` doppelklicken |
 
 Beide Versionen tragen dieselbe Versionsnummer (aktuell 2.05) und öffnen dieselben
 Projektdateien (`.rack.json`).
@@ -115,7 +114,7 @@ Dateien entstehen nur dort, wo du speicherst oder exportierst.
 
 Auf GitHub baut der Workflow „Windows-EXE bauen“ (`.github/workflows/build-windows.yml`) die
 EXE und hängt sie an das Release `v<Version>`; der Workflow „Webversion (HTML/PHP)“ baut die
-beiden Web-ZIPs (lokal: `python web/build_web.py`) und hängt sie an dasselbe Release.
+Web-ZIP (lokal: `python web/build_web.py`) und hängt sie an dasselbe Release.
 
 **Gerätevorlagen** stehen für beide Versionen in einer Datei: [`rackcore/vorlagen.json`](rackcore/vorlagen.json)
 (eine Zeile je Vorlage). Neue Vorlage = neue Zeile; die Desktop-EXE und das Web-ZIP übernehmen

@@ -46,7 +46,5 @@ Build funktioniert wie bisher.
 - **3D**: Die 3D-Ansicht ist Teil der Desktop-EXE; es gibt nur eine Artifact Configuration
   (`desktop-2d`).
 - **Web (`web/`)**: HTML/PHP, keine eigene Windows-Programmdatei – braucht kein Code-Signing.
-  Die portable Variante enthält das unveränderte PHP für Windows, das nicht mit unserem
-  Zertifikat signiert wird.
 - Neue Bibliotheken in
   `THIRD-PARTY-NOTICES.md` aufnehmen; alle müssen eine Open-Source-Lizenz haben.

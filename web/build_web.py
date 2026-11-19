@@ -1,8 +1,6 @@
-"""Baut die Webversion (HTML/PHP) als ZIP für die Synology – und optional portabel für Windows.
+"""Baut die Webversion (HTML/PHP) als ZIP für die Synology bzw. jeden PHP-Webserver.
 
     python web/build_web.py                      → dist/Rack-Planer-Web_v<V>.zip
-    python web/build_web.py --php <ordner>       → zusätzlich dist/Rack-Planer-Web-portabel_v<V>.zip
-                                                   (<ordner> = entpacktes PHP für Windows, NTS x64)
 
 Inhalt des Programmordners „rack-planer“ im ZIP:
     index.html, api.php, app/ (Oberfläche, Rechenkern, Schriften, Bibliotheken),
@@ -56,51 +54,8 @@ def write_zip(path: Path, entries: dict[str, bytes]):
             z.writestr(name, data)
 
 
-PHP_INI = """; PHP-Einstellungen der portablen Webversion (nur für den mitgelieferten PHP-Server)
-extension_dir = "ext"
-extension = zip
-upload_max_filesize = 32M
-post_max_size = 40M
-memory_limit = 256M
-date.timezone = Europe/Berlin
-display_errors = Off
-"""
-
-START_BAT = r"""@echo off
-chcp 65001 >nul
-title Rack-Planer (Webversion, portabel)
-cd /d "%~dp0"
-set PORT=8090
-echo Rack-Planer laeuft: http://127.0.0.1:%PORT%/
-echo Dieses Fenster offen lassen. Schliessen beendet den Rack-Planer.
-echo.
-start "" "http://127.0.0.1:%PORT%/"
-"%~dp0php\php.exe" -c "%~dp0php\php.ini" -S 127.0.0.1:%PORT% -t "%~dp0rack-planer"
-echo.
-echo Der Server wurde beendet. Ist Port %PORT% schon belegt? Dann in dieser Datei PORT aendern.
-pause
-"""
-
-START_LAN_BAT = r"""@echo off
-chcp 65001 >nul
-title Rack-Planer (Webversion, im Netzwerk)
-cd /d "%~dp0"
-set PORT=8090
-echo Rack-Planer ist im Netzwerk erreichbar unter http://<IP dieses PCs>:%PORT%/
-echo IP-Adressen dieses PCs:
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do echo    http://%%a:%PORT%/
-echo Windows fragt beim ersten Start evtl. nach einer Firewall-Freigabe.
-echo Dieses Fenster offen lassen. Schliessen beendet den Rack-Planer.
-echo.
-start "" "http://127.0.0.1:%PORT%/"
-"%~dp0php\php.exe" -c "%~dp0php\php.ini" -S 0.0.0.0:%PORT% -t "%~dp0rack-planer"
-pause
-"""
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--php", type=Path, help="Ordner mit PHP für Windows (für die portable Variante)")
     ap.add_argument("--out", type=Path, default=ROOT / "dist")
     a = ap.parse_args()
     v = version()
@@ -108,22 +63,6 @@ def main():
     web_zip = a.out / f"Rack-Planer-Web_v{v}.zip"
     write_zip(web_zip, {f"{FOLDER}/{k}": d for k, d in files.items()})
     print(f"Fertig: {web_zip} ({len(files)} Dateien)")
-    if a.php:
-        if not (a.php / "php.exe").is_file():
-            raise SystemExit(f"php.exe fehlt in {a.php}")
-        top = f"Rack-Planer-Web-portabel_v{v}"
-        entries = {f"{top}/{FOLDER}/{k}": d for k, d in files.items()}
-        for p in sorted(a.php.rglob("*")):
-            if p.is_file():
-                entries[f"{top}/php/{p.relative_to(a.php).as_posix()}"] = p.read_bytes()
-        entries[f"{top}/php/php.ini"] = PHP_INI.encode("utf-8")
-        entries[f"{top}/Rack-Planer starten.bat"] = START_BAT.replace("\n", "\r\n").encode("utf-8")
-        entries[f"{top}/Start im Netzwerk (LAN).bat"] = START_LAN_BAT.replace("\n", "\r\n").encode("utf-8")
-        entries[f"{top}/LIESMICH.txt"] = (WEB / "portable" / "LIESMICH.txt").read_text(encoding="utf-8") \
-            .replace("__V__", v).replace("\n", "\r\n").encode("utf-8-sig")
-        port_zip = a.out / f"{top}.zip"
-        write_zip(port_zip, entries)
-        print(f"Fertig: {port_zip}")
     shutil.rmtree(ROOT / "web" / "__pycache__", ignore_errors=True)
 
 

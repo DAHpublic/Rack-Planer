@@ -47,5 +47,3 @@ Lizenztexte stehen in `web/app/LIZENZEN.txt` und liegen dem ZIP bei:
 | **jsPDF** 4.2.1 | PDF-Export im Browser | MIT | https://github.com/parallax/jsPDF |
 | **svg2pdf.js** 2.9.0 | SVG → PDF für jsPDF | MIT | https://github.com/yWorks/svg2pdf.js |
 
-Die portable Windows-Variante bringt außerdem **PHP** für Windows mit (PHP License v3.01,
-https://www.php.net/license/), unverändert von https://windows.php.net.

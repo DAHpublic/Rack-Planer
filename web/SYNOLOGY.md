@@ -81,13 +81,6 @@ Alles Wichtige liegt in `web/rack-planer/daten`:
 
 Diesen Ordner in Hyper Backup aufnehmen oder ab und zu kopieren.
 
-## Portabel unter Windows (ohne NAS)
-
-`Rack-Planer-Web-portabel_v<Version>.zip` entpacken und **`Rack-Planer starten.bat`**
-doppelklicken – PHP ist enthalten, der Browser öffnet `http://127.0.0.1:8090`. Mit
-`Start im Netzwerk (LAN).bat` können auch andere PCs zugreifen. Die Daten liegen in
-`rack-planer\daten`.
-
 ## Entwicklung
 
 ```

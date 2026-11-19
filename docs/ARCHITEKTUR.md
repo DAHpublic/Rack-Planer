@@ -6,7 +6,7 @@ Dateiformat:
 1. **Desktop-Version** (`planer2d/`) – portable Windows-EXE mit Vorderseite, Rückseite (2D)
    und 3D-Ansicht
 2. **Webversion** (`web/`) – HTML/PHP, z. B. auf der Synology (Web Station), offener Zugriff
-   im LAN; auch als portable Windows-Variante mit mitgeliefertem PHP
+   im LAN
 
 Damit sich beide nicht auseinanderentwickeln, liegen alle fachlichen Regeln an genau
 einer Stelle: im Paket **`rackcore/`**.
@@ -69,8 +69,7 @@ Details stehen in `rackcore/fileformat.py`.
   ersetzt die Dateien und entfernt Dateien, die es laut neuem Manifest nicht mehr gibt.
   Abschaltbar mit `{"update_erlaubt": false}` in `daten/einstellungen.json`.
 - **Betrieb:** Synology Web Station (oder jeder Webserver mit PHP), kein Login, offener
-  Zugriff im LAN. Portabel für Windows: dasselbe ZIP plus PHP für Windows und Start-Batch
-  (`php -S`). Anleitung: `web/SYNOLOGY.md`.
+  Zugriff im LAN. Anleitung: `web/SYNOLOGY.md`.
 
 ## 3D-Ansicht
 
