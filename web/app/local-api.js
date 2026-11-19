@@ -10,7 +10,7 @@
   "use strict";
   const C = root.RackCore, E = root.RackEngine, X = root.RackExport;
 
-  const INFO = { version: "", zip: false, update_allowed: false };
+  const INFO = { version: "", zip: false, update_allowed: false, server_save: true, auto_update: null };
   const OWN_GROUP = "Eigene Vorlagen";
   let ready = null;
 
@@ -64,6 +64,8 @@
       ready = (async () => {
         const [info] = await Promise.all([phpJSON("GET", "info"), loadFonts()]);
         Object.assign(INFO, info);
+        // Automatisches Update fällig (nachts im Zeitfenster)? Im Hintergrund anstoßen – die Seite wartet nicht darauf.
+        if (info.auto_update && info.auto_update.faellig) fetch(phpUrl("autoupdate"), { cache: "no-store" }).catch(() => {});
         // eingebaute Vorlagen für die Migration älterer Dateien
         const tpls = await phpJSON("GET", "templates");
         C.setTemplates(tpls.filter((t) => t.builtin));
@@ -77,7 +79,8 @@
     return { app: C.APP_NAME, version: INFO.version, format: C.FORMAT_VERSION, categories: C.CATEGORIES,
       colors: C.CATEGORY_COLORS, depth_presets: C.DEPTH_PRESETS, height_presets: [6, 9, 12, 15, 22, 42, 47],
       max_ips: C.MAX_IPS, shelf_width_mm: C.SHELF_WIDTH_MM, file_suffix: C.FILE_SUFFIX, own_group: OWN_GROUP,
-      new_document: C.newDocument(), update_allowed: !!INFO.update_allowed, zip: !!INFO.zip };
+      new_document: C.newDocument(), update_allowed: !!INFO.update_allowed, zip: !!INFO.zip,
+      server_save: INFO.server_save !== false, auto_update: INFO.auto_update || null };
   }
 
   async function exportFile(body) {

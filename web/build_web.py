@@ -4,7 +4,9 @@
 
 Inhalt des Programmordners „rack-planer“ im ZIP:
     index.html, api.php, app/ (Oberfläche, Rechenkern, Schriften, Bibliotheken),
-    vorlagen.json (Kopie von rackcore/vorlagen.json), version.json, manifest.json, LIESMICH.txt
+    vorlagen.json (Kopie von rackcore/vorlagen.json), version.json, manifest.json, LIESMICH.txt,
+    einstellungen.ini (Standard-Einstellungen; Updates überschreiben sie nie, deshalb nicht im
+    manifest.json) und app/einstellungen-standard.txt (dieselbe Datei als Vorlage, falls sie fehlt)
 Der Ordner „daten“ (Schränke, eigene Vorlagen) ist NICHT im ZIP – ein Update überschreibt
 also nie Daten. manifest.json listet alle Programmdateien; beim Update im Browser werden
 Dateien, die es nicht mehr gibt, entfernt.
@@ -42,8 +44,11 @@ def program_files() -> dict[str, bytes]:
     files["LIESMICH.txt"] = (WEB / "LIESMICH.txt").read_text(encoding="utf-8").replace("__V__", v).encode("utf-8")
     files["version.json"] = json.dumps({"app": "Rack-Planer", "edition": "web", "version": v,
                                         "built": _dt.date.today().isoformat()}, indent=2).encode("utf-8")
+    settings = (WEB / "einstellungen.ini").read_bytes()
+    files["app/einstellungen-standard.txt"] = settings
     names = sorted(files) + ["manifest.json"]
     files["manifest.json"] = json.dumps({"files": names}, indent=1).encode("utf-8")
+    files["einstellungen.ini"] = settings      # nur für Neuinstallationen; nicht im Manifest
     return files
 
 

@@ -13,7 +13,7 @@ Auf der [Release-Seite](https://github.com/DAHpublic/Rack-Planer/releases/latest
 | `Rack-Planer_v<Version>.exe` | **Desktop-Version** für Windows – herunterladen und starten, keine Installation |
 | `Rack-Planer-Web_v<Version>.zip` | **Webversion** für die Synology (Web Station) oder jeden Webserver mit PHP 7.4+ – Anleitung: [`web/SYNOLOGY.md`](web/SYNOLOGY.md) |
 
-Beide Versionen tragen dieselbe Versionsnummer (aktuell 2.05) und öffnen dieselben
+Beide Versionen tragen dieselbe Versionsnummer (aktuell 2.06) und öffnen dieselben
 Projektdateien (`.rack.json`).
 
 - **Desktop-Version:** ein Programm mit drei Ansichten, umschaltbar in der Leiste:
@@ -21,8 +21,10 @@ Projektdateien (`.rack.json`).
 - **Webversion (HTML/PHP):** kein Docker, keine Datenbank – Ordner auf den Webserver kopieren,
   fertig. Alle im Heimnetz öffnen den Planer im Browser; die Schränke liegen zentral als
   `.rack.json`-Dateien auf dem Server. Gerechnet, gezeichnet und exportiert (PDF/PNG/SVG) wird
-  im Browser. **Update:** im Programm Hilfe → Programm aktualisieren → neues ZIP auswählen; die
-  Daten bleiben erhalten.
+  im Browser. **Update:** automatisch – jede Nacht (00:30–03:30 Uhr) holt sich die Webversion
+  eine neue Version vom GitHub-Release; Daten und Einstellungen (`einstellungen.ini`) bleiben
+  erhalten. Abschaltbar in `einstellungen.ini`, dort lässt sich auch das Speichern auf dem
+  Server abschalten.
 
 > Die EXE ist noch nicht digital signiert. Windows SmartScreen kann deshalb beim ersten Start
 > warnen („Weitere Informationen“ → „Trotzdem ausführen“).
@@ -107,7 +109,7 @@ Dateien entstehen nur dort, wo du speicherst oder exportierst.
 1. Python 3.10 oder neuer von https://www.python.org installieren
    („Add python.exe to PATH“ anhaken).
 2. `build.bat` doppelklicken.
-3. Ergebnis: `dist\Rack-Planer_v<Version>.exe`, z. B. `Rack-Planer_v2.05.exe` (eine einzelne
+3. Ergebnis: `dist\Rack-Planer_v<Version>.exe`, z. B. `Rack-Planer_v2.06.exe` (eine einzelne
    Datei, ohne Installation lauffähig). Die Versionsnummer steht in `APP_VERSION` in
    `rackcore/version.py` (gilt für Desktop und Web); ältere EXE-Dateien werden nie überschrieben. Für eine neue EXE zuerst
    die Version erhöhen. Versionsnummer und Entwickler stehen auch in den Dateieigenschaften.

@@ -74,6 +74,10 @@ const S = {
   bannersCollapsed: false,
 };
 const dirty = () => S.rack && canon(S.rack) !== S.savedState;
+/** Speichert der Server Schränke? (einstellungen.ini: server_speichern) – sonst „Datei-Modus“. */
+const serverSave = () => S.meta?.server_save !== false;
+/** Wurde der Schrank schon gespeichert (auf dem Server oder als Datei)? */
+const persisted = () => !!(S.doc?.id || S.doc?.fileSaved);
 
 /* ------------------------------------------------------------------------------------ */
 /* Server                                                                                 */
@@ -425,7 +429,8 @@ function renderProps(p, force) {
   mt.textContent = p.mount_text;
   mt.className = p.mount_warn ? "warn-text" : "";
   $("#p-shelf-btn").hidden = !p.can_put_on_shelf;
-  $("#p-save-tpl").disabled = p.is_shelf;
+  $("#p-save-tpl").disabled = p.is_shelf || !serverSave();
+  $("#p-save-tpl").title = serverSave() ? "" : "Eigene Vorlagen brauchen das Speichern auf dem Server (in einstellungen.ini abgeschaltet).";
 }
 
 function renderExtraIps(p, force) {
@@ -454,9 +459,9 @@ function renderExtraIps(p, force) {
 
 function updateChrome() {
   const name = S.rack?.name || "Unbenannt";
-  const title = `${dirty() ? "*" : ""}${name}${S.doc?.id ? "" : " (neu)"} – Rack-Planer ${S.meta?.version || ""} (Webversion)`;
+  const title = `${dirty() ? "*" : ""}${name}${persisted() ? "" : " (neu)"} – Rack-Planer ${S.meta?.version || ""} (Webversion)`;
   document.title = title;
-  $("#doc-title").textContent = (dirty() ? "● " : "") + (S.doc?.id ? name : `${name} (noch nicht gespeichert)`);
+  $("#doc-title").textContent = (dirty() ? "● " : "") + (persisted() ? name : `${name} (noch nicht gespeichert)`);
   $("#doc-title").title = dirty() ? "Ungespeicherte Änderungen" : "";
   const ro = S.preview !== null;
   $("#tb-undo").disabled = ro || !S.undo.length;
@@ -533,9 +538,10 @@ async function askShelf(ask) {
 /* ------------------------------------------------------------------------------------ */
 /* Schrank laden / speichern                                                              */
 /* ------------------------------------------------------------------------------------ */
-function loadDocument(doc, rec = null) {
+function loadDocument(doc, rec = null, fileName = "") {
   S.doc = {
     id: rec?.id || null, revision: rec?.revision || null,
+    fileSaved: !!fileName, fileName,      // Datei-Modus: aus einer Datei geöffnet bzw. als Datei gespeichert
     created: doc.created || todayIso(), saved_at: doc.saved_at || "",
     history: (doc.history?.entries || []).slice(),
     history_enabled: !!doc.history?.enabled, history_declined: !!doc.history?.declined,
@@ -562,7 +568,8 @@ function loadDocument(doc, rec = null) {
 async function newRack(skipAsk = false) {
   if (!skipAsk && !(await maybeSave())) return;
   await loadDocument(structuredClone(S.meta.new_document));
-  status("Neuer Schrank – zum Speichern auf dem Server: Speichern (Strg + S).");
+  status(serverSave() ? "Neuer Schrank – zum Speichern auf dem Server: Speichern (Strg + S)."
+    : "Neuer Schrank – Speichern (Strg + S) lädt ihn als .rack.json-Datei herunter.");
 }
 
 async function openRack(id, skipAsk = false) {
@@ -600,7 +607,49 @@ function adoptSaved(rec) {
   history.replaceState(null, "", `#/rack/${rec.id}`);
 }
 
+function nowIso() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${todayIso()}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function saveBlob(blob, name) {
+  const a = h("a", { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+function rackFileName(name) {
+  return (String(name || "Rack").trim().replace(/[\\/:*?"<>|\x00-\x1f]+/g, "_") || "Rack").slice(0, 120) + ".rack.json";
+}
+
+/**
+ * Datei-Modus (Speichern auf dem Server abgeschaltet): Schrank inkl. Historie als .rack.json
+ * herunterladen – wie „Speichern“ in der Desktop-Version. Ist die Historie aktiv, wandert der
+ * zuletzt gespeicherte Stand in die Historie.
+ */
+async function saveToFile({ asNew = false } = {}) {
+  if (S.preview !== null) endPreview();
+  await queue;
+  const d = S.doc;
+  if (asNew) { d.history = []; d.created = todayIso(); d.fileName = ""; }
+  else if (d.fileSaved && d.history_enabled && S.savedState && canon(S.rack) !== S.savedState) {
+    const old = JSON.parse(S.savedState);
+    const last = d.history.length ? canon(d.history[d.history.length - 1].rack) : "";
+    if (last !== S.savedState) d.history.push({ saved_at: d.saved_at || "", as_of: old.as_of || "", note: "", rack: old });
+  }
+  d.saved_at = nowIso();
+  let doc;
+  try { doc = RackCore.readDocument(documentPayload()).doc; } catch (e) { await alertBox(`Speichern fehlgeschlagen:\n${e.message}`); return false; }
+  const name = d.fileName && !asNew ? d.fileName : rackFileName(S.rack.name);
+  saveBlob(new Blob([JSON.stringify(doc, null, 2) + "\n"], { type: "application/json" }), name);
+  d.fileSaved = true; d.fileName = name;
+  S.savedState = canon(S.rack);
+  updateChrome();
+  renderHistory();
+  status(`Gespeichert als Datei „${name}“ (Download-Ordner des Browsers).`, 7000);
+  return true;
+}
+
 async function save({ force = false, asNew = false } = {}) {
+  if (!serverSave()) return saveToFile({ asNew });
   if (S.preview !== null) endPreview();
   await queue;
   try {
@@ -650,6 +699,7 @@ function promptBox(title, label, value) {
 }
 
 async function downloadFile() {
+  if (!serverSave()) { await saveToFile(); return; }
   if (!S.doc.id || dirty()) {
     const ok = await confirmBox("Heruntergeladen wird der gespeicherte Stand. Jetzt speichern und dann herunterladen?", "Speichern und herunterladen");
     if (!ok || !(await save())) return;
@@ -662,6 +712,16 @@ async function importFile(file) {
   if (!(await maybeSave())) return;
   let data;
   try { data = JSON.parse(await file.text()); } catch (e) { await alertBox(`Die Datei „${file.name}“ ist keine gültige Projektdatei.`); return; }
+  if (!serverSave()) {
+    // Datei-Modus: nur im Browser öffnen, nichts auf dem Server ablegen
+    let res;
+    try { res = RackCore.readDocument(data, file.lastModified ? new Date(file.lastModified).toISOString().slice(0, 10) : ""); }
+    catch (e) { await alertBox(`Die Datei „${file.name}“ konnte nicht gelesen werden:\n${e.message}`); return; }
+    await loadDocument(res.doc, null, file.name);
+    status(`Geöffnet: ${file.name}`);
+    if (res.notes?.length) await alertBox(`„${file.name}“ stammt aus einer älteren Version.\n\n${res.notes.join("\n\n")}`);
+    return;
+  }
   let rec;
   try { rec = await sendJSON("POST", "/api/racks", { document: data }); } catch (e) { await alertBox(`Die Datei „${file.name}“ konnte nicht importiert werden:\n${e.message}`); return; }
   await openRack(rec.id, true);
@@ -670,6 +730,7 @@ async function importFile(file) {
 }
 
 async function showRackList() {
+  if (!serverSave()) { $("#file-input").click(); return; }
   let racks;
   try { racks = await getJSON("/api/racks"); } catch (e) { await alertBox(e.message); return; }
   const tbody = h("tbody");
@@ -710,7 +771,7 @@ async function showRackList() {
 /* ------------------------------------------------------------------------------------ */
 async function maybeOfferHistory() {
   const d = S.doc;
-  if (!d.id || !dirty() || d.history_enabled || d.history_declined || S.historyOffered) return;
+  if (!persisted() || !dirty() || d.history_enabled || d.history_declined || S.historyOffered) return;
   S.historyOffered = true;
   await new Promise((r) => setTimeout(r, 0));
   const old = JSON.parse(S.savedState || "{}").as_of || "";
@@ -754,7 +815,8 @@ function renderHistory() {
     list.append(el);
   }
   let info;
-  if (!d.id) info = "Die Historie wird mit dem Schrank auf dem Server gespeichert – zuerst speichern.";
+  if (!persisted()) info = serverSave() ? "Die Historie wird mit dem Schrank auf dem Server gespeichert – zuerst speichern."
+    : "Die Historie wird in der .rack.json-Datei des Schranks gespeichert – zuerst speichern.";
   else if (!d.history.length) info = "Noch keine früheren Stände. " + (d.history_enabled ?
     "Beim nächsten Speichern wird der bisherige Stand hier abgelegt." : "Aktiviere die Historie, dann bleibt bei jedem Speichern der bisherige Stand erhalten.");
   else info = "Klicke einen Stand an, um ihn im Schrank anzusehen.";
@@ -803,6 +865,7 @@ async function previewCopy() {
 }
 async function previewAsNew() {
   if (S.preview === null) return;
+  if (!serverSave()) return previewCopy();
   const snap = S.doc.history[S.preview];
   const doc = { ...structuredClone(snap.rack), name: `${snap.rack.name} (Stand ${fmtDate(snap.as_of)})`, created: todayIso() };
   const rec = await sendJSON("POST", "/api/racks", { document: doc });
@@ -1293,8 +1356,11 @@ const ACTIONS = {
 };
 
 const MENUS = {
-  save: () => [["Speichern", "save", "Strg + S"], ["Als neuen Schrank speichern …", "saveAsNew"], null,
-    ["Datei importieren (.rack.json) …", "importFile"], ["Als Datei herunterladen (.rack.json)", "downloadFile"]],
+  save: () => serverSave()
+    ? [["Speichern", "save", "Strg + S"], ["Als neuen Schrank speichern …", "saveAsNew"], null,
+      ["Datei importieren (.rack.json) …", "importFile"], ["Als Datei herunterladen (.rack.json)", "downloadFile"]]
+    : [["Speichern (als .rack.json-Datei)", "save", "Strg + S"], ["Als neuen Schrank speichern …", "saveAsNew"], null,
+      ["Datei öffnen (.rack.json) …", "importFile"]],
   export: () => [["als PDF …", "pdf", "Strg + P"], ["als Bild (PNG/SVG) …", "image", "Strg + E"], null,
     ["3D-Ansicht als Bild (PNG) …", "image3d", "Strg + Umschalt + E"]],
   view: () => [["Seite wechseln", "flip", "Strg + R"], [(S.ui.show_other ? "✓" : "") + "Gegenseite andeuten", "other", "", S.ui.show_other],
@@ -1371,35 +1437,60 @@ function showAbout() {
 }
 
 const RELEASES_URL = "https://github.com/DAHpublic/Rack-Planer/releases";
-/** Neue Programmversion einspielen: ZIP von der Release-Seite hochladen. Die Daten (Ordner „daten“) bleiben unberührt. */
+/**
+ * Hilfe → Programm aktualisieren: Stand des automatischen Updates und – nur mit
+ * web_update = true in einstellungen.ini – Update von Hand (von GitHub oder per ZIP).
+ * Die Daten (Ordner „daten“) und einstellungen.ini bleiben immer unberührt.
+ */
 async function showUpdate() {
-  const info = RackLocal.INFO;
+  let info = RackLocal.INFO;
+  try { info = Object.assign(RackLocal.INFO, await RackLocal.phpJSON("GET", "info")); } catch (e) { /* letzter Stand */ }
+  const au = info.auto_update || {};
   const file = h("input", { type: "file", accept: ".zip,application/zip" });
-  const msg = h("div", { class: "hint" });
   const can = info.update_allowed && info.zip && info.app_writable !== false;
-  const why = !info.update_allowed ? "Updates über den Browser sind in daten/einstellungen.json abgeschaltet." :
+  const why = !info.update_allowed ? "Das Update von Hand ist abgeschaltet (einstellungen.ini: web_update = false)." :
     !info.zip ? "Auf dem Server fehlt die PHP-Erweiterung „zip“ (Web Station → PHP-Profil → Erweiterungen)." :
     info.app_writable === false ? "Der Webserver darf den Programmordner nicht ändern (Schreibrechte fehlen)." : "";
-  const buttons = [{ label: "Schließen", value: null }];
-  if (can) buttons.push({ label: "Update einspielen", primary: true, value: () => file.files[0] || null });
+  const last = (au.protokoll || [])[0];
+  const autoText = !au.installiert ? "Entwicklungsumgebung – kein automatisches Update." :
+    au.auto ? `<b>an</b> – jede Nacht zwischen ${esc(au.von)} und ${esc(au.bis)} Uhr (Serverzeit) wird auf GitHub nach einer neuen Version gesucht und sie eingespielt.` :
+      "<b>aus</b> (einstellungen.ini: auto_update = false).";
+  const warn = [];
+  if (au.installiert && au.auto && !info.zip) warn.push("Es fehlt die PHP-Erweiterung „zip“ – das automatische Update kann nichts einspielen.");
+  if (au.installiert && au.auto && !au.curl) warn.push("Es fehlt die PHP-Erweiterung „curl“ – GitHub ist nicht erreichbar.");
+  if (au.installiert && au.auto && info.app_writable === false) warn.push("Der Webserver darf den Programmordner nicht ändern (Schreibrechte fehlen).");
   const body = h("div", {},
     h("p", { html: `Installiert: <b>Rack-Planer ${esc(S.meta.version)}</b> (Webversion)` }),
-    h("p", { html: `So geht's: Auf der <a href="${RELEASES_URL}" target="_blank" rel="noopener">Release-Seite</a> die Datei ` +
-      "<b>Rack-Planer-Web_v…zip</b> herunterladen und hier auswählen. Programm und mitgelieferte Vorlagen werden ersetzt; " +
-      "gespeicherte Schränke und eigene Vorlagen (Ordner <b>daten</b>) bleiben erhalten." }),
-    can ? h("div", { class: "form" }, h("label", { text: "Update-Datei:" }), file) :
-      h("p", { class: "warn-text", text: `${why} Alternativ von Hand: Inhalt des ZIP in den Rack-Planer-Ordner kopieren und vorhandene Dateien ersetzen – den Ordner „daten“ nicht löschen.` }),
-    msg);
-  const f = await modal({ title: "Programm aktualisieren", body, buttons });
-  if (!f) return;
+    h("p", { html: `Automatisches Update: ${autoText}` }),
+    last ? h("p", { class: "hint", text: `Zuletzt: ${fmtDateTime(last.zeit)} – ${last.text}` }) :
+      au.installiert && au.auto ? h("p", { class: "hint", text: "Noch nicht geprüft. Damit die Prüfung jede Nacht sicher läuft, im Aufgabenplaner der Synology eine Aufgabe anlegen (Anleitung: web/SYNOLOGY.md)." }) : "",
+    ...warn.map((w) => h("p", { class: "warn-text", text: w })),
+    can ? h("div", {},
+      h("p", { html: `Von Hand: <b>Jetzt aktualisieren</b> holt die neueste Version von GitHub. Oder auf der <a href="${RELEASES_URL}" target="_blank" rel="noopener">Release-Seite</a> ` +
+        "<b>Rack-Planer-Web_v…zip</b> herunterladen und hier auswählen. Gespeicherte Schränke, eigene Vorlagen (Ordner <b>daten</b>) und einstellungen.ini bleiben erhalten." }),
+      h("div", { class: "form" }, h("label", { text: "Update-Datei:" }), file)) :
+      h("p", { class: "hint", text: `${why} Neue Versionen gibt es auf der Release-Seite; von Hand: Inhalt des ZIP in den Rack-Planer-Ordner kopieren und vorhandene Dateien ersetzen – den Ordner „daten“ und einstellungen.ini nicht ersetzen.` }));
+  const buttons = [{ label: "Schließen", value: null }];
+  if (can && au.installiert) buttons.push({ label: "Jetzt aktualisieren", value: "github" });
+  if (can) buttons.push({ label: "ZIP einspielen", primary: true, value: () => file.files[0] || "nofile" });
+  const v = await modal({ title: "Programm aktualisieren", body, buttons });
+  if (!v) return;
+  if (v === "nofile") { await alertBox("Bitte zuerst die Update-Datei (ZIP) auswählen."); return; }
   if (dirty() && !(await confirmBox("Es gibt ungespeicherte Änderungen. Nach dem Update lädt die Seite neu – vorher speichern?", "Speichern und fortfahren"))) return;
   if (dirty() && !(await save())) return;
-  const fd = new FormData();
-  fd.append("datei", f);
-  status("Update wird eingespielt …", 60000);
   let r;
-  try { r = await RackLocal.phpJSON("POST", "update", fd); } catch (e) { await alertBox(`Update fehlgeschlagen:\n${e.message}`); return; }
-  await alertBox(`Update eingespielt: ${r.old_version} → ${r.new_version} (${r.files} Dateien). Die Seite wird jetzt neu geladen.`);
+  if (v === "github") {
+    status("Suche auf GitHub nach einer neuen Version …", 120000);
+    try { r = await RackLocal.phpJSON("POST", "update/jetzt"); } catch (e) { status(""); await alertBox(`Update fehlgeschlagen:\n${e.message}`); return; }
+    status("");
+    if (r.status !== "aktualisiert") { await alertBox(r.text); return; }
+  } else {
+    const fd = new FormData();
+    fd.append("datei", v);
+    status("Update wird eingespielt …", 60000);
+    try { r = await RackLocal.phpJSON("POST", "update", fd); } catch (e) { await alertBox(`Update fehlgeschlagen:\n${e.message}`); return; }
+  }
+  await alertBox(`Update eingespielt: ${r.old_version} → ${r.new_version}${r.files ? ` (${r.files} Dateien)` : ""}. Die Seite wird jetzt neu geladen.`);
   location.reload();
 }
 
@@ -1491,6 +1582,11 @@ async function main() {
   bindToolbar();
   init3d();
   await loadTemplates();
+  if (!serverSave()) {
+    await newRack(true);
+    status("Speichern auf dem Server ist abgeschaltet: Speichern lädt den Schrank als .rack.json-Datei herunter, Öffnen liest eine solche Datei ein.", 12000);
+    return;
+  }
   const m = /^#\/rack\/([\w-]+)/.exec(location.hash);
   let last = null;
   try { last = localStorage.getItem("rackplaner.last"); } catch (e) { /* */ }

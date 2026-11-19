@@ -21,10 +21,14 @@ Der Ordner „daten“ entsteht beim ersten Speichern. Zum Sichern genügt es, i
 
 Update
 ------
-Im Rack-Planer: Hilfe → Programm aktualisieren … → neue Rack-Planer-Web_v….zip auswählen.
-Programm und mitgelieferte Vorlagen werden ersetzt, „daten“ bleibt unverändert.
-Von Hand geht es auch: Inhalt des neuen ZIP über den Ordner kopieren (Dateien ersetzen),
-„daten“ nicht löschen.
+Automatisch: Jede Nacht zwischen 00:30 und 03:30 Uhr holt sich der Rack-Planer eine neue
+Version vom GitHub-Release (braucht die PHP-Erweiterungen „zip“ und „curl“). Damit das
+zuverlässig passiert, im Aufgabenplaner stündlich von 00:30 bis 03:00 aufrufen lassen:
+  curl -fsS "http://localhost/rack-planer/api.php?p=autoupdate"
+Programm und mitgelieferte Vorlagen werden ersetzt; „daten“ und einstellungen.ini bleiben.
+Von Hand: Inhalt des neuen ZIP über den Ordner kopieren (Dateien ersetzen, aber
+einstellungen.ini behalten), „daten“ nicht löschen. Mit web_update = true geht es auch im
+Browser unter Hilfe → Programm aktualisieren.
 
 Vorlagen
 --------
@@ -32,6 +36,10 @@ Die mitgelieferten Gerätevorlagen stehen in vorlagen.json (eine Zeile je Vorlag
 Datei wie in der Desktop-Version) und kommen mit jedem Update neu. Eigene Vorlagen legt man
 im Programm an („Als Vorlage speichern“); sie liegen in daten/ und bleiben bei Updates erhalten.
 
-Einstellungen (optional)
-------------------------
-daten/einstellungen.json mit {"update_erlaubt": false} schaltet das Update über den Browser ab.
+Einstellungen
+-------------
+einstellungen.ini (Erklärungen stehen in der Datei):
+  auto_update = true        nachts automatisch aktualisieren
+  web_update = false        Update von Hand im Browser
+  server_speichern = true   false: der Server speichert nichts, Schränke als Datei speichern
+Updates überschreiben diese Datei nie.

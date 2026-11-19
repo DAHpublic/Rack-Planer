@@ -26,7 +26,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "7.4"          # älteste unterstützte Version – läuft dann auch mit 8.x
-          extensions: zip, json
+          extensions: zip, json, curl
           tools: none
       - name: Tests (Kern, Web-Rechenkern gegen rackcore)
         run: |
@@ -40,11 +40,18 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.49.1
           npx playwright install --with-deps chromium
-          mkdir -p "$RUNNER_TEMP/srv" "$RUNNER_TEMP/shots"
+          mkdir -p "$RUNNER_TEMP/srv" "$RUNNER_TEMP/srv2" "$RUNNER_TEMP/shots"
           unzip -q dist/Rack-Planer-Web_v*.zip -d "$RUNNER_TEMP/srv"
+          unzip -q dist/Rack-Planer-Web_v*.zip -d "$RUNNER_TEMP/srv2"
+          # Update von Hand ist standardmäßig aus – für den Test einschalten
+          sed -i 's/^web_update = false/web_update = true/' "$RUNNER_TEMP/srv/rack-planer/einstellungen.ini"
+          sed -i 's/^server_speichern = true/server_speichern = false/' "$RUNNER_TEMP/srv2/rack-planer/einstellungen.ini"
           php -S 127.0.0.1:8099 -t "$RUNNER_TEMP/srv/rack-planer" > "$RUNNER_TEMP/php.log" 2>&1 &
+          php -S 127.0.0.1:8098 -t "$RUNNER_TEMP/srv2/rack-planer" > "$RUNNER_TEMP/php2.log" 2>&1 &
           sleep 1
           node tests/e2e/web_e2e.js http://127.0.0.1:8099/ "$(ls dist/Rack-Planer-Web_v*.zip)" "$RUNNER_TEMP/shots"
+          node tests/e2e/web_e2e_dateimodus.js http://127.0.0.1:8098/ "$RUNNER_TEMP/shots"
+          grep -q "web_update = true" "$RUNNER_TEMP/srv/rack-planer/einstellungen.ini"   # Update hat die Einstellungen nicht überschrieben
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -52,6 +59,7 @@ jobs:
           path: |
             ${{ runner.temp }}/shots
             ${{ runner.temp }}/php.log
+            ${{ runner.temp }}/php2.log
       - uses: actions/upload-artifact@v4
         with:
           name: Rack-Planer-Web
