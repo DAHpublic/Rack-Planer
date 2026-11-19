@@ -18,7 +18,7 @@ wie die Desktop-Version). Kein Login – gedacht für das eigene LAN, nicht für
    ein PHP-Paket (z. B. „PHP 8.2“).
 2. **PHP-Profil anlegen:** Web Station → **Skriptsprache-Einstellungen** → PHP → Erstellen:
    - Profilname: `Rack-Planer`, PHP-Version: 8.2 (oder die installierte)
-   - Erweiterungen: **zip** anhaken (nur für das Update im Browser nötig)
+   - Erweiterungen: **zip** und **curl** anhaken (für das automatische Update)
    - Sonst alles auf Standard lassen.
 3. **Dateien kopieren:** ZIP entpacken und den Ordner **`rack-planer`** in den freigegebenen
    Ordner **`web`** kopieren (File Station oder `\\<NAS>\web` im Explorer). Danach gibt es
@@ -27,7 +27,7 @@ wie die Desktop-Version). Kein Login – gedacht für das eigene LAN, nicht für
    Berechtigung → Erstellen: Benutzer oder Gruppe **`http`**, **Lesen und Schreiben** anhaken,
    „Auf diesen Ordner, Unterordner und Dateien anwenden“ → Speichern.
    (Der Webserver legt beim ersten Speichern den Ordner `daten` an und braucht für das
-   Update im Browser Schreibrechte auf die Programmdateien.)
+   automatische Update Schreibrechte auf die Programmdateien.)
 5. **PHP für den Ordner aktivieren:** Web Station → **Web-Portal** (bzw. „Webdienste“) →
    Standard-Server bzw. das Portal für den Ordner `web` → **PHP-Profil „Rack-Planer“** wählen.
    Bei der Standardeinrichtung genügt es, unter Web Station → **Allgemeine Einstellungen**
@@ -46,23 +46,73 @@ Web Station → Web-Portal → Erstellen → „Portal auf Basis eines Webdienst
 erstellen: Typ „Statische Website mit PHP“, Dokumentstamm `web/rack-planer`, PHP-Profil
 „Rack-Planer“; dann ein Portal mit Port 8090 für diesen Webdienst anlegen.
 
+## Einstellungen (`einstellungen.ini`)
+
+Im Ordner `web/rack-planer` liegt die Datei **`einstellungen.ini`** (mit dem Texteditor oder
+dem Texteditor-Paket der Synology bearbeiten). Updates überschreiben sie **nie**; fehlt sie,
+legt der Rack-Planer sie mit den Standardwerten neu an. Nach einer Änderung genügt es, die
+Seite im Browser neu zu laden.
+
+| Eintrag | Standard | Bedeutung |
+|---|---|---|
+| `auto_update` | `true` | Neue Versionen nachts automatisch von GitHub laden und einspielen |
+| `auto_update_von` / `auto_update_bis` | `"00:30"` / `"03:30"` | Zeitfenster der Prüfung (Uhrzeit des NAS) |
+| `web_update` | `false` | Update von Hand über Hilfe → Programm aktualisieren (ZIP hochladen oder „Jetzt aktualisieren“) |
+| `quelle` | `"DAHpublic/Rack-Planer"` | GitHub-Repository, aus dessen neuestem Release das Update kommt |
+| `server_speichern` | `true` | `false`: Der Server speichert nichts. „Speichern“ lädt den Schrank als `.rack.json`-Datei herunter (inkl. Historie), „Schränke …“ öffnet eine solche Datei – wie in der Desktop-Version. Eigene Vorlagen gibt es dann nicht. |
+
 ## Update
 
-Neue Version einspielen – Schränke und eigene Vorlagen bleiben erhalten:
+### Automatisch (Standard)
 
-1. Neue `Rack-Planer-Web_v<Version>.zip` von der Release-Seite herunterladen (nicht entpacken).
-2. Im Rack-Planer: **Hilfe → Programm aktualisieren …** → ZIP auswählen → „Update einspielen“.
-3. Die Seite lädt neu; unter Hilfe → Infos steht die neue Versionsnummer.
+Jede Nacht zwischen **00:30 und 03:30 Uhr** schaut der Rack-Planer auf der
+[Release-Seite](https://github.com/DAHpublic/Rack-Planer/releases/latest) nach. Gibt es eine
+neuere Version, lädt er `Rack-Planer-Web_v<Version>.zip` herunter, prüft die Prüfsumme und
+spielt es ein. Ersetzt werden nur Programmdateien und die mitgelieferten Vorlagen – der Ordner
+`daten` und `einstellungen.ini` bleiben unverändert. Geprüft wird höchstens einmal je Nacht
+(nach einem Fehler, z. B. Internet weg, frühestens eine Stunde später erneut).
 
-Das Update ersetzt nur Programmdateien und die mitgelieferten Vorlagen (`vorlagen.json`). Der
-Ordner `daten` wird nie angefasst.
+Voraussetzungen: PHP-Erweiterungen **zip** und **curl** (Schritt 2), Schreibrechte für `http`
+(Schritt 4) und Internetzugang des NAS.
 
-**Von Hand** (falls die Erweiterung „zip“ fehlt oder das Update abgeschaltet ist): ZIP
-entpacken und den Inhalt von `rack-planer` über `web/rack-planer` kopieren, vorhandene Dateien
-ersetzen. Den Ordner `daten` nicht löschen.
+PHP läuft nur, wenn jemand die Seite aufruft – nachts schaut aber selten jemand vorbei. Damit
+die Prüfung zuverlässig jede Nacht läuft, einmalig eine Aufgabe im **Aufgabenplaner** anlegen:
 
-Wer das Update im Browser nicht möchte (z. B. weil viele im Netz Zugriff haben): Datei
-`web/rack-planer/daten/einstellungen.json` mit dem Inhalt `{"update_erlaubt": false}` anlegen.
+1. Systemsteuerung → **Aufgabenplaner** → Erstellen → Geplante Aufgabe →
+   **Benutzerdefiniertes Skript**.
+2. Reiter **Allgemein**: Aufgabe `Rack-Planer Update`, Benutzer `root` (das Skript ruft nur
+   die Webseite auf; das Update selbst macht der Webserver mit seinen eigenen Rechten).
+3. Reiter **Zeitplan**: Täglich, Erste Ausführungszeit **00:30**, Häufigkeit **Alle 60 Minuten**,
+   Letzte Ausführungszeit **03:00**.
+4. Reiter **Aufgabeneinstellungen** → Benutzerdefiniertes Skript:
+   ```
+   curl -fsS "http://localhost/rack-planer/api.php?p=autoupdate"
+   ```
+   (Die Adresse ist dieselbe wie im Browser, nur mit `localhost` statt der NAS-IP – bei
+   eigenem Port z. B. `http://localhost:8090/api.php?p=autoupdate`.)
+5. OK. Zum Testen die Aufgabe markieren → **Ausführen**; unter Aktion → Ergebnis anzeigen steht
+   die Antwort, z. B. `"status":"ausserhalb"` (tagsüber), `"aktuell"` oder `"aktualisiert"`.
+
+Mehrfaches Aufrufen schadet nicht: Ist die Nacht schon erledigt, passiert nichts. Wer die Seite
+nachts im Zeitfenster öffnet, stößt die Prüfung ebenfalls an. Das Ergebnis der letzten Prüfung
+steht im Rack-Planer unter **Hilfe → Programm aktualisieren**.
+
+Alternativ ohne Webserver (SSH oder Aufgabenplaner): `php82 /volume1/web/rack-planer/api.php
+autoupdate` (`--jetzt` prüft sofort, ohne Zeitfenster). Dafür muss das PHP der Kommandozeile
+die Erweiterungen zip und curl haben – der Weg über curl oben ist meist einfacher.
+
+**Von Version 2.05 auf 2.06** (einmalig, die erste Version mit automatischem Update): wie bisher
+von Hand – Hilfe → Programm aktualisieren → ZIP auswählen, oder Ordnerinhalt ersetzen.
+
+### Von Hand
+
+- **Im Browser:** in `einstellungen.ini` `web_update = true` setzen. Dann bietet Hilfe →
+  Programm aktualisieren **„Jetzt aktualisieren“** (holt die neueste Version von GitHub) und
+  **„ZIP einspielen“** (vorher heruntergeladenes `Rack-Planer-Web_v<Version>.zip` auswählen,
+  nicht entpacken).
+- **Ordner ersetzen** (geht immer): ZIP entpacken und den Inhalt von `rack-planer` über
+  `web/rack-planer` kopieren, vorhandene Dateien ersetzen – **außer `einstellungen.ini`**
+  (beim Nachfragen „überspringen“ wählen). Den Ordner `daten` nicht löschen.
 
 ## Vorlagen aktualisieren
 
@@ -87,10 +137,12 @@ Diesen Ordner in Hyper Backup aufnehmen oder ab und zu kopieren.
 php -S 127.0.0.1:8090 -t web          # direkt aus dem Repository (Vorlagen/Version aus rackcore)
 python web/build_web.py               # ZIP nach dist/
 python -m pytest tests/test_web_core.py   # Rechenkern JS gegen rackcore (braucht Node.js)
-node tests/e2e/web_e2e.js http://127.0.0.1:8099/ [update.zip]   # Browsertest (Playwright)
+node tests/e2e/web_e2e.js http://127.0.0.1:8099/ [update.zip]   # Browsertest (Playwright, web_update = true)
+node tests/e2e/web_e2e_dateimodus.js http://127.0.0.1:8098/      # Browsertest mit server_speichern = false
 ```
 
-Aufbau: `web/index.html` (Oberfläche), `web/api.php` (Speicher, Update), `web/app/`:
+Aufbau: `web/index.html` (Oberfläche), `web/api.php` (Speicher, Update, Einstellungen),
+`web/einstellungen.ini` (Standard-Einstellungen), `web/app/`:
 `app.js` (Bedienung), `core.js` (Kern wie `rackcore`), `engine.js` (Bearbeitungsschritte und
 Anzeigedaten), `render.js` (SVG-Zeichnung), `textfit.js` (Schriftmaße), `export.js`
 (PDF/PNG/SVG), `view3d.js` (3D-Ansicht), `local-api.js` (verbindet alles).

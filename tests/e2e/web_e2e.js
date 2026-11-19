@@ -1,5 +1,6 @@
 // Browsertest der Webversion (HTML/PHP): startet nichts selbst – erwartet den Server unter
 // BASE (z. B. php -S 127.0.0.1:8099 -t <ordner>). Aufruf: node tests/e2e/web_e2e.js <BASE> [update.zip] [shots-dir]
+// Für den Update-Test muss in einstellungen.ini web_update = true stehen (Standard: false).
 "use strict";
 const { chromium } = require("playwright");
 const fs = require("fs");
@@ -157,7 +158,7 @@ const rows = (page) => page.locator("#devlist tr").count();
       await menu(page, "help", "Programm aktualisieren");
       await page.waitForSelector(".modal input[type=file]");
       await page.setInputFiles(".modal input[type=file]", UPDATE_ZIP);
-      await clickButton(page, "Update einspielen");
+      await clickButton(page, "ZIP einspielen");
       await page.locator(".modal", { hasText: "Update eingespielt" }).waitFor({ timeout: 20000 });
       ok(true, (await page.locator(".modal .body").textContent()).trim());
       await Promise.all([page.waitForNavigation(), clickButton(page, "OK")]);

@@ -64,10 +64,20 @@ Details stehen in `rackcore/fileformat.py`.
 - **Vorlagen:** `rackcore/vorlagen.json` ist die einzige Quelle für Desktop (`templates.py`
   lädt sie, die EXE enthält sie) und Web (das ZIP enthält eine Kopie als `vorlagen.json`).
 - **Update:** `python web/build_web.py` baut `Rack-Planer-Web_v<V>.zip` (Ordner `rack-planer`
-  mit `version.json` und `manifest.json`, ohne `daten`). Im Programm: Hilfe → Programm
-  aktualisieren lädt das ZIP hoch; `api.php` prüft es (nur Programmdateien, kein `daten/`),
-  ersetzt die Dateien und entfernt Dateien, die es laut neuem Manifest nicht mehr gibt.
-  Abschaltbar mit `{"update_erlaubt": false}` in `daten/einstellungen.json`.
+  mit `version.json`, `manifest.json` und `einstellungen.ini`, ohne `daten`). Seit 2.06
+  **automatisch**: `api.php?p=autoupdate` (vom Aufgabenplaner per curl oder im Hintergrund
+  beim Seitenaufruf) prüft nur im Zeitfenster (Standard 00:30–03:30, höchstens einmal je
+  Nacht, nach Fehlern stündlich neu) das neueste GitHub-Release, lädt
+  `Rack-Planer-Web_v<V>.zip`, prüft die sha256-Prüfsumme des Release-Assets und spielt es ein.
+  `install_zip()` ersetzt nur Programmdateien (kein `daten/`), legt `einstellungen.ini` nur an,
+  wenn sie fehlt (nie überschreiben, nie löschen) und entfernt Dateien, die es laut neuem
+  Manifest nicht mehr gibt. Sperrdatei und Protokoll (`.update.lock`, `.autoupdate.json`) liegen
+  im Programmordner, nicht in `daten`. Update von Hand (ZIP hochladen oder „Jetzt
+  aktualisieren“) nur mit `web_update = true`.
+- **Einstellungen:** `einstellungen.ini` im Programmordner (`auto_update`, Zeitfenster,
+  `web_update`, `quelle`, `server_speichern`). Mit `server_speichern = false` lehnt `api.php`
+  alle Schreibzugriffe ab; die Oberfläche arbeitet dann wie die Desktop-Version mit Dateien
+  (Speichern = `.rack.json` herunterladen, inkl. Historie; Öffnen = Datei einlesen).
 - **Betrieb:** Synology Web Station (oder jeder Webserver mit PHP), kein Login, offener
   Zugriff im LAN. Anleitung: `web/SYNOLOGY.md`.
 

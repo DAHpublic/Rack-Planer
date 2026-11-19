@@ -15,9 +15,18 @@
  *   GET  racks                Liste              POST racks       neuer Schrank / Import
  *   GET  racks/<id>           laden              POST racks/<id>&m=PUT   speichern (Historie)
  *   POST racks/<id>&m=DELETE  löschen
- *   POST update               Update-ZIP einspielen (Feld „datei“)
+ *   POST update               Update-ZIP einspielen (Feld „datei“; nur mit web_update = true)
+ *   POST update/jetzt         neueste Version sofort von GitHub holen (nur mit web_update = true)
+ *   GET  autoupdate           automatisches Update: prüft nur im Zeitfenster (nachts) und höchstens
+ *                             einmal je Nacht – für den Aufgabenplaner (curl/wget) gedacht
  *
- * Läuft mit PHP 7.4 bis 8.x ohne zusätzliche Erweiterungen (Update braucht „zip“).
+ * Kommandozeile: php api.php autoupdate [--jetzt]   (--jetzt: ohne Zeitfenster, sofort prüfen)
+ *
+ * Einstellungen: einstellungen.ini (wird von Updates nie überschrieben, fehlt sie, wird sie
+ * mit den Standardwerten angelegt).
+ *
+ * Läuft mit PHP 7.4 bis 8.x ohne zusätzliche Erweiterungen. Updates brauchen „zip“, das
+ * automatische Update außerdem „curl“ (oder allow_url_fopen mit „openssl“).
  */
 
 declare(strict_types=1);
@@ -29,7 +38,18 @@ $dataDir = getenv('RACK_DATA') ?: (APP_DIR . DIRECTORY_SEPARATOR . 'daten');
 define('DATA_DIR', rtrim($dataDir, '/\\'));
 define('RACK_DIR', DATA_DIR . DIRECTORY_SEPARATOR . 'schraenke');
 define('OWN_TPL_FILE', DATA_DIR . DIRECTORY_SEPARATOR . 'eigene-vorlagen.json');
-define('SETTINGS_FILE', DATA_DIR . DIRECTORY_SEPARATOR . 'einstellungen.json');
+define('SETTINGS_FILE', APP_DIR . DIRECTORY_SEPARATOR . 'einstellungen.ini');
+define('SETTINGS_TEMPLATE', APP_DIR . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'einstellungen-standard.txt');
+define('UPDATE_STATE', APP_DIR . DIRECTORY_SEPARATOR . '.autoupdate.json');
+define('UPDATE_LOCK', APP_DIR . DIRECTORY_SEPARATOR . '.update.lock');
+define('UPDATE_DOWNLOAD', APP_DIR . DIRECTORY_SEPARATOR . '.update-download.zip');
+const SETTINGS_DEFAULTS = [
+    'auto_update' => true, 'auto_update_von' => '00:30', 'auto_update_bis' => '03:30',
+    'web_update' => false, 'quelle' => 'DAHpublic/Rack-Planer', 'server_speichern' => true,
+];
+// Dateien im Programmordner, die ein Update nie ersetzt oder löscht
+const UPDATE_KEEP = ['einstellungen.ini', '.autoupdate.json', '.update.lock', '.update-download.zip'];
+const UPDATE_MAX_BYTES = 60 * 1024 * 1024;
 const OWN_GROUP = 'Eigene Vorlagen';
 const SHELF_WIDTH_MM = 450;
 const CATEGORIES = ['NAS', 'Firewall', 'Server', 'USV', 'Switch', 'Router', 'NVR', 'Telefonanlage',
@@ -37,7 +57,7 @@ const CATEGORIES = ['NAS', 'Firewall', 'Server', 'USV', 'Switch', 'Router', 'NVR
 const JSON_FLAGS = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
 
 // Dateien, die ein Update ersetzen darf (alles andere im ZIP wird ignoriert)
-const UPDATE_EXT = ['php', 'html', 'js', 'css', 'json', 'svg', 'ttf', 'txt', 'md', 'png', 'ico', 'bat', 'htaccess'];
+const UPDATE_EXT = ['php', 'html', 'js', 'css', 'json', 'svg', 'ttf', 'txt', 'md', 'png', 'ico', 'bat', 'htaccess', 'ini'];
 
 /* ------------------------------------------------------------------------------------ */
 /* Hilfen                                                                                 */
@@ -140,6 +160,7 @@ function read_json(string $path, $default = null)
 /** Alle schreibenden Zugriffe nacheinander (eine Sperrdatei für den ganzen Speicher). */
 function with_lock(callable $fn)
 {
+    require_server_save();
     protect_data_dir();
     $fh = fopen(DATA_DIR . DIRECTORY_SEPARATOR . '.lock', 'c');
     if ($fh === false) {
@@ -154,9 +175,92 @@ function with_lock(callable $fn)
     }
 }
 
+/** Wahrheitswert aus der INI-Datei (true/false, on/off, yes/no, an/aus, ja/nein, 1/0). */
+function to_bool($v, bool $default): bool
+{
+    if (is_bool($v)) {
+        return $v;
+    }
+    if (is_int($v) || is_float($v)) {
+        return $v != 0;
+    }
+    $t = strtolower(trim((string)$v));
+    if (in_array($t, ['1', 'true', 'on', 'yes', 'an', 'ein', 'ja'], true)) {
+        return true;
+    }
+    if (in_array($t, ['0', 'false', 'off', 'no', 'aus', 'nein', 'none', ''], true)) {
+        return false;
+    }
+    return $default;
+}
+
+/** Fehlt einstellungen.ini, aus der mitgelieferten Vorlage anlegen (ohne Fehler, falls das nicht geht). */
+function ensure_settings_file(): void
+{
+    if (!is_file(SETTINGS_FILE) && is_file(SETTINGS_TEMPLATE)) {
+        @copy(SETTINGS_TEMPLATE, SETTINGS_FILE);
+    }
+}
+
+$SETTINGS_ERROR = '';
+
+/** Einstellungen: Standardwerte, überschrieben von einstellungen.ini (Abschnitte sind egal). */
 function settings(): array
 {
-    return read_json(SETTINGS_FILE, []);
+    static $s = null;
+    global $SETTINGS_ERROR;
+    if ($s !== null) {
+        return $s;
+    }
+    $s = SETTINGS_DEFAULTS;
+    ensure_settings_file();
+    if (!is_file(SETTINGS_FILE)) {
+        return $s;
+    }
+    $ini = @parse_ini_file(SETTINGS_FILE, true, INI_SCANNER_TYPED);
+    if (!is_array($ini)) {
+        $SETTINGS_ERROR = 'einstellungen.ini ist fehlerhaft und wird ignoriert (es gelten die Standardwerte).';
+        return $s;
+    }
+    $flat = [];
+    foreach ($ini as $k => $v) {
+        if (is_array($v)) {
+            foreach ($v as $k2 => $v2) {
+                $flat[strtolower((string)$k2)] = $v2;
+            }
+        } else {
+            $flat[strtolower((string)$k)] = $v;
+        }
+    }
+    foreach (SETTINGS_DEFAULTS as $k => $def) {
+        if (!array_key_exists($k, $flat)) {
+            continue;
+        }
+        $s[$k] = is_bool($def) ? to_bool($flat[$k], $def) : trim((string)$flat[$k]);
+    }
+    foreach (['auto_update_von', 'auto_update_bis'] as $k) {
+        if (!preg_match('/^([01]?\d|2[0-3]):[0-5]\d$/', $s[$k])) {
+            $s[$k] = SETTINGS_DEFAULTS[$k];
+        }
+    }
+    if (!preg_match('#^[\w.-]+/[\w.-]+$#', $s['quelle'])) {
+        $s['quelle'] = SETTINGS_DEFAULTS['quelle'];
+    }
+    return $s;
+}
+
+function server_save_allowed(): bool
+{
+    return settings()['server_speichern'];
+}
+
+/** Schreibzugriffe auf „daten“ nur, wenn das Speichern auf dem Server erlaubt ist. */
+function require_server_save(): void
+{
+    if (!server_save_allowed()) {
+        throw new HttpError(403, 'Das Speichern auf dem Server ist abgeschaltet (einstellungen.ini: server_speichern = false). '
+            . 'Schränke bitte als Datei herunterladen.');
+    }
 }
 
 function app_version(): string
@@ -445,31 +549,54 @@ function delete_rack(string $id): void
 }
 
 /* ------------------------------------------------------------------------------------ */
-/* Update: neue Programmversion aus dem ZIP der Release-Seite einspielen                  */
+/* Update: neue Programmversion einspielen (ZIP hochladen oder automatisch von GitHub)    */
+/*                                                                                        */
+/* Ersetzt nur Programmdateien und vorlagen.json. Nie angefasst werden der Ordner „daten“ */
+/* und einstellungen.ini (UPDATE_KEEP).                                                   */
 /* ------------------------------------------------------------------------------------ */
 
-function update_allowed(): bool
+function web_update_allowed(): bool
 {
-    return (settings()['update_erlaubt'] ?? true) !== false;
+    return settings()['web_update'];
 }
 
-function apply_update(): array
+/** Läuft die Webversion als installierter Ordner (aus dem ZIP) – nicht direkt aus dem Repository? */
+function is_installed(): bool
 {
-    if (!update_allowed()) {
-        throw new HttpError(403, 'Updates über den Browser sind abgeschaltet (daten/einstellungen.json).');
+    return is_file(APP_DIR . DIRECTORY_SEPARATOR . 'version.json');
+}
+
+/** Nur ein Update gleichzeitig (eigene Sperrdatei im Programmordner – „daten“ bleibt unberührt). */
+function with_update_lock(callable $fn, bool $wait = true)
+{
+    $fh = @fopen(UPDATE_LOCK, 'c');
+    if ($fh === false) {
+        throw new HttpError(500, 'Der Webserver darf den Programmordner nicht ändern (Schreibrechte fehlen).');
     }
+    if (!flock($fh, $wait ? LOCK_EX : LOCK_EX | LOCK_NB)) {
+        fclose($fh);
+        throw new HttpError(409, 'Es läuft gerade schon ein Update.');
+    }
+    try {
+        return $fn();
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+}
+
+/** Update-ZIP prüfen und einspielen. $expect: erwartete Versionsnummer (beim Download von GitHub). */
+function install_zip(string $zipPath, string $expect = ''): array
+{
     if (!class_exists('ZipArchive')) {
         throw new HttpError(500, 'Auf dem Server fehlt die PHP-Erweiterung „zip“. Bitte in der Web Station aktivieren '
-            . 'oder das Update von Hand einspielen (Ordnerinhalt ersetzen, „daten“ behalten).');
+            . 'oder das Update von Hand einspielen (Ordnerinhalt ersetzen, „daten“ und einstellungen.ini behalten).');
     }
-    $f = $_FILES['datei'] ?? null;
-    if (!$f || ($f['error'] ?? 1) !== UPLOAD_ERR_OK) {
-        $err = $f['error'] ?? -1;
-        throw new HttpError(400, $err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE
-            ? 'Die Datei ist zu groß für die PHP-Einstellung upload_max_filesize.' : 'Keine Datei empfangen.');
+    if (!is_installed()) {
+        throw new HttpError(400, 'Update nur für die installierte Webversion (Ordner aus dem ZIP), nicht im Repository.');
     }
     $zip = new ZipArchive();
-    if ($zip->open($f['tmp_name']) !== true) {
+    if ($zip->open($zipPath) !== true) {
         throw new HttpError(400, 'Die Datei ist kein gültiges ZIP-Archiv.');
     }
     // Wurzel des Programms im ZIP finden (Ordner mit version.json und api.php)
@@ -490,6 +617,10 @@ function apply_update(): array
         $zip->close();
         throw new HttpError(400, 'Das ZIP ist keine Webversion des Rack-Planers.');
     }
+    if ($expect !== '' && (string)($ver['version'] ?? '') !== $expect) {
+        $zip->close();
+        throw new HttpError(400, "Das ZIP enthält Version „" . ($ver['version'] ?? '?') . "“ statt „{$expect}“.");
+    }
     // Dateien prüfen und lesen
     $files = [];
     for ($i = 0; $i < $zip->numFiles; $i++) {
@@ -499,6 +630,10 @@ function apply_update(): array
         }
         $rel = substr($n, strlen($prefix));
         if ($rel === '' || strpos($rel, '..') !== false || $rel[0] === '/' || preg_match('#^(daten|php)/#i', $rel)) {
+            continue;
+        }
+        // eigene Einstellungen nie überschreiben – nur anlegen, falls sie fehlen
+        if (in_array($rel, UPDATE_KEEP, true) && ($rel !== 'einstellungen.ini' || is_file(SETTINGS_FILE))) {
             continue;
         }
         $ext = strtolower(pathinfo($rel, PATHINFO_EXTENSION));
@@ -521,26 +656,279 @@ function apply_update(): array
     }
     $old = read_json(APP_DIR . '/manifest.json', ['files' => []]);
     $oldVersion = app_version();
-    return with_lock(function () use ($files, $old, $oldVersion, $ver) {
-        // api.php zuletzt schreiben
-        uksort($files, function ($a, $b) {
-            return ($a === 'api.php') <=> ($b === 'api.php') ?: strcmp($a, $b);
-        });
-        foreach ($files as $rel => $content) {
-            write_atomic(APP_DIR . '/' . $rel, $content);
-        }
-        // Dateien, die es in der neuen Version nicht mehr gibt, entfernen
-        $removed = 0;
-        foreach (($old['files'] ?? []) as $rel) {
-            $rel = (string)$rel;
-            if (!isset($files[$rel]) && strpos($rel, '..') === false && !preg_match('#^(daten|php)/#i', $rel)
-                && is_file(APP_DIR . '/' . $rel)) {
-                $removed += @unlink(APP_DIR . '/' . $rel) ? 1 : 0;
-            }
-        }
-        return ['ok' => true, 'old_version' => $oldVersion, 'new_version' => (string)($ver['version'] ?? '?'),
-            'files' => count($files), 'removed' => $removed];
+    // api.php zuletzt schreiben
+    uksort($files, function ($a, $b) {
+        return ($a === 'api.php') <=> ($b === 'api.php') ?: strcmp($a, $b);
     });
+    foreach ($files as $rel => $content) {
+        write_atomic(APP_DIR . '/' . $rel, $content);
+    }
+    // Dateien, die es in der neuen Version nicht mehr gibt, entfernen
+    $removed = 0;
+    foreach (($old['files'] ?? []) as $rel) {
+        $rel = (string)$rel;
+        if (!isset($files[$rel]) && !in_array($rel, UPDATE_KEEP, true) && strpos($rel, '..') === false
+            && !preg_match('#^(daten|php)/#i', $rel) && is_file(APP_DIR . '/' . $rel)) {
+            $removed += @unlink(APP_DIR . '/' . $rel) ? 1 : 0;
+        }
+    }
+    return ['ok' => true, 'old_version' => $oldVersion, 'new_version' => (string)($ver['version'] ?? '?'),
+        'files' => count($files), 'removed' => $removed];
+}
+
+/** Update-ZIP aus dem Browser (Hilfe → Programm aktualisieren). */
+function apply_update(): array
+{
+    if (!web_update_allowed()) {
+        throw new HttpError(403, 'Updates über den Browser sind abgeschaltet (einstellungen.ini: web_update = false).');
+    }
+    $f = $_FILES['datei'] ?? null;
+    if (!$f || ($f['error'] ?? 1) !== UPLOAD_ERR_OK) {
+        $err = $f['error'] ?? -1;
+        throw new HttpError(400, $err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE
+            ? 'Die Datei ist zu groß für die PHP-Einstellung upload_max_filesize.' : 'Keine Datei empfangen.');
+    }
+    return with_update_lock(function () use ($f) {
+        $r = install_zip($f['tmp_name']);
+        log_update(['ergebnis' => 'aktualisiert', 'art' => 'hochgeladen',
+            'text' => "Update von Hand: {$r['old_version']} → {$r['new_version']}"]);
+        return $r;
+    });
+}
+
+/* --- automatisches Update von GitHub ------------------------------------------------- */
+
+/** HTTPS-Abruf mit curl (bevorzugt) oder allow_url_fopen. Mit $toFile wird in die Datei geschrieben. */
+function http_get(string $url, ?string $toFile = null): string
+{
+    $ua = 'Rack-Planer-Web/' . app_version() . ' (+https://github.com/' . settings()['quelle'] . ')';
+    $headers = ['Accept: ' . ($toFile ? 'application/octet-stream' : 'application/vnd.github+json')];
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        $fh = null;
+        $opts = [CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5, CURLOPT_USERAGENT => $ua,
+            CURLOPT_HTTPHEADER => $headers, CURLOPT_CONNECTTIMEOUT => 20, CURLOPT_TIMEOUT => 180,
+            CURLOPT_FAILONERROR => false, CURLOPT_MAXFILESIZE => UPDATE_MAX_BYTES];
+        if (defined('CURLOPT_PROTOCOLS')) {
+            $opts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
+        }
+        if ($toFile) {
+            $fh = fopen($toFile, 'wb');
+            if ($fh === false) {
+                throw new HttpError(500, 'Der Webserver darf den Programmordner nicht ändern (Schreibrechte fehlen).');
+            }
+            $opts[CURLOPT_FILE] = $fh;
+        } else {
+            $opts[CURLOPT_RETURNTRANSFER] = true;
+        }
+        curl_setopt_array($ch, $opts);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($fh) {
+            fclose($fh);
+        }
+        if ($body === false) {
+            throw new HttpError(502, "GitHub ist nicht erreichbar ({$err}).");
+        }
+        if ($code !== 200) {
+            throw new HttpError(502, "GitHub antwortet mit Fehler {$code}.");
+        }
+        return $toFile ? '' : (string)$body;
+    }
+    if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN) || !extension_loaded('openssl')) {
+        throw new HttpError(500, 'Für das automatische Update braucht PHP die Erweiterung „curl“ '
+            . '(Web Station → PHP-Profil → Erweiterungen) oder allow_url_fopen mit „openssl“.');
+    }
+    $ctx = stream_context_create(['http' => ['method' => 'GET', 'header' => array_merge($headers, ["User-Agent: {$ua}"]),
+        'follow_location' => 1, 'max_redirects' => 5, 'timeout' => 180, 'ignore_errors' => true]]);
+    $body = @file_get_contents($url, false, $ctx, 0, UPDATE_MAX_BYTES + 1);
+    $status = 0;
+    foreach (($http_response_header ?? []) as $line) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) {
+            $status = (int)$m[1];   // letzte Statuszeile zählt (nach Weiterleitungen)
+        }
+    }
+    if ($body === false) {
+        throw new HttpError(502, 'GitHub ist nicht erreichbar.');
+    }
+    if ($status !== 200) {
+        throw new HttpError(502, "GitHub antwortet mit Fehler {$status}.");
+    }
+    if (strlen($body) > UPDATE_MAX_BYTES) {
+        throw new HttpError(502, 'Die Update-Datei ist zu groß.');
+    }
+    if ($toFile) {
+        if (@file_put_contents($toFile, $body) === false) {
+            throw new HttpError(500, 'Der Webserver darf den Programmordner nicht ändern (Schreibrechte fehlen).');
+        }
+        return '';
+    }
+    return $body;
+}
+
+/** Neuestes Release: [Version, Download-Adresse des Web-ZIP, sha256 oder ''] */
+function latest_release(): array
+{
+    $repo = settings()['quelle'];
+    $rel = json_decode(http_get("https://api.github.com/repos/{$repo}/releases/latest"), true);
+    if (!is_array($rel) || empty($rel['tag_name'])) {
+        throw new HttpError(502, 'Die Antwort von GitHub ist unverständlich.');
+    }
+    $version = preg_replace('/^v/i', '', (string)$rel['tag_name']);
+    foreach (($rel['assets'] ?? []) as $a) {
+        $name = (string)($a['name'] ?? '');
+        if (preg_match('/^Rack-Planer-Web_v(.+)\.zip$/', $name, $m)) {
+            $url = (string)($a['browser_download_url'] ?? '');
+            if (strpos($url, 'https://github.com/') !== 0) {
+                throw new HttpError(502, 'Unerwartete Download-Adresse im Release.');
+            }
+            $digest = (string)($a['digest'] ?? '');
+            return [$m[1], $url, preg_match('/^sha256:([a-f0-9]{64})$/', $digest, $d) ? $d[1] : '', $version];
+        }
+    }
+    return [$version, '', '', $version];
+}
+
+function minutes_of(string $hhmm): int
+{
+    [$h, $m] = array_map('intval', explode(':', $hhmm));
+    return $h * 60 + $m;
+}
+
+/**
+ * Zeitfenster der Nacht, in der $now liegt: Kennung (Datum des Fensterbeginns) oder null,
+ * wenn $now außerhalb liegt. Fenster über Mitternacht (z. B. 23:00–02:00) gehen auch.
+ */
+function update_window(DateTimeImmutable $now): ?string
+{
+    $s = settings();
+    $von = minutes_of($s['auto_update_von']);
+    $bis = minutes_of($s['auto_update_bis']);
+    $t = (int)$now->format('G') * 60 + (int)$now->format('i');
+    if ($von <= $bis) {
+        return $t >= $von && $t < $bis ? $now->format('Y-m-d') : null;
+    }
+    if ($t >= $von) {
+        return $now->format('Y-m-d');
+    }
+    return $t < $bis ? $now->modify('-1 day')->format('Y-m-d') : null;
+}
+
+function update_state(): array
+{
+    return read_json(UPDATE_STATE, []);
+}
+
+/** Ergebnis merken (die letzten 20 Einträge) – für Hilfe → Programm aktualisieren. */
+function log_update(array $entry): void
+{
+    $st = update_state();
+    $entry = ['zeit' => now_iso()] + $entry;
+    $log = array_slice(array_merge([$entry], $st['protokoll'] ?? []), 0, 20);
+    $st['protokoll'] = $log;
+    if (isset($entry['fenster'])) {
+        $st['fenster'] = $entry['fenster'];
+        $st['fenster_ok'] = $entry['ergebnis'] !== 'fehler';
+        $st['fenster_zeit'] = time();
+    }
+    @file_put_contents(UPDATE_STATE, json_encode($st, JSON_FLAGS) . "\n", LOCK_EX);
+}
+
+/** Muss in dieser Nacht noch geprüft werden? (Nach einem Fehler höchstens einmal je Stunde neu.) */
+function auto_update_due(?DateTimeImmutable $now = null): bool
+{
+    if (!settings()['auto_update'] || !is_installed()) {
+        return false;
+    }
+    $win = update_window($now ?: new DateTimeImmutable());
+    if ($win === null) {
+        return false;
+    }
+    $st = update_state();
+    if (($st['fenster'] ?? '') !== $win) {
+        return true;
+    }
+    return empty($st['fenster_ok']) && time() - (int)($st['fenster_zeit'] ?? 0) >= 3600;
+}
+
+/**
+ * Automatisches Update: neuestes Release prüfen und, falls neuer, einspielen.
+ * $force: sofort (ohne Zeitfenster und ohne „schon geprüft“) – Kommandozeile --jetzt bzw. Browser.
+ */
+function auto_update(bool $force = false, string $art = 'automatisch'): array
+{
+    if (!is_installed()) {
+        return ['status' => 'entwicklung', 'text' => 'Kein Update im Repository (nur in der installierten Webversion).'];
+    }
+    if (!$force && !settings()['auto_update']) {
+        return ['status' => 'aus', 'text' => 'Automatisches Update ist abgeschaltet (einstellungen.ini: auto_update = false).'];
+    }
+    $now = new DateTimeImmutable();
+    $win = update_window($now);
+    if (!$force && $win === null) {
+        $s = settings();
+        return ['status' => 'ausserhalb', 'text' => "Geprüft wird nur zwischen {$s['auto_update_von']} und {$s['auto_update_bis']} Uhr "
+            . '(Serverzeit ' . $now->format('H:i') . ').'];
+    }
+    if (!$force && !auto_update_due($now)) {
+        return ['status' => 'erledigt', 'text' => 'In dieser Nacht wurde schon geprüft.'];
+    }
+    try {
+        return with_update_lock(function () use ($force, $win, $art) {
+            if (!$force && !auto_update_due()) {
+                return ['status' => 'erledigt', 'text' => 'In dieser Nacht wurde schon geprüft.'];
+            }
+            $base = ['art' => $art] + ($win !== null ? ['fenster' => $win] : []);
+            try {
+                $current = app_version();
+                [$latest, $url, $sha, $tag] = latest_release();
+                if ($url === '') {
+                    $r = ['status' => 'aktuell', 'text' => "Im neuesten Release (v{$tag}) gibt es keine Webversion – nichts zu tun."];
+                } elseif (!version_compare($latest, $current, '>')) {
+                    $r = ['status' => 'aktuell', 'text' => "Rack-Planer {$current} ist aktuell."];
+                } else {
+                    @unlink(UPDATE_DOWNLOAD);
+                    try {
+                        http_get($url, UPDATE_DOWNLOAD);
+                        if ($sha !== '' && !hash_equals($sha, (string)hash_file('sha256', UPDATE_DOWNLOAD))) {
+                            throw new HttpError(502, 'Die heruntergeladene Datei ist beschädigt (Prüfsumme stimmt nicht).');
+                        }
+                        $res = install_zip(UPDATE_DOWNLOAD, $latest);
+                    } finally {
+                        @unlink(UPDATE_DOWNLOAD);
+                    }
+                    $r = ['status' => 'aktualisiert', 'text' => "Aktualisiert: {$res['old_version']} → {$res['new_version']}.",
+                        'old_version' => $res['old_version'], 'new_version' => $res['new_version']];
+                }
+                log_update($base + ['ergebnis' => $r['status'], 'text' => $r['text']]);
+                return $r;
+            } catch (HttpError $e) {
+                log_update($base + ['ergebnis' => 'fehler', 'text' => $e->getMessage()]);
+                throw $e;
+            } catch (Throwable $e) {
+                log_update($base + ['ergebnis' => 'fehler', 'text' => $e->getMessage()]);
+                throw new HttpError(500, 'Update fehlgeschlagen: ' . $e->getMessage());
+            }
+        }, $force);
+    } catch (HttpError $e) {
+        if ($e->status === 409) {
+            return ['status' => 'laeuft', 'text' => $e->getMessage()];
+        }
+        return ['status' => 'fehler', 'text' => $e->getMessage()];
+    }
+}
+
+/** Kurzinfo für die Oberfläche. */
+function update_info(): array
+{
+    $s = settings();
+    $st = update_state();
+    return ['auto' => $s['auto_update'], 'von' => $s['auto_update_von'], 'bis' => $s['auto_update_bis'],
+        'quelle' => $s['quelle'], 'faellig' => auto_update_due(), 'installiert' => is_installed(),
+        'curl' => function_exists('curl_init') || (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN) && extension_loaded('openssl')),
+        'protokoll' => array_slice($st['protokoll'] ?? [], 0, 5)];
 }
 
 /* ------------------------------------------------------------------------------------ */
@@ -551,9 +939,12 @@ function route(string $method, string $p)
 {
     if ($p === 'info' || $p === 'health') {
         $writable = is_dir(DATA_DIR) ? is_writable(DATA_DIR) : is_writable(dirname(DATA_DIR));
+        global $SETTINGS_ERROR;
+        $s = settings();
         return ['ok' => true, 'app' => 'Rack-Planer', 'version' => app_version(), 'php' => PHP_VERSION,
-            'zip' => class_exists('ZipArchive'), 'writable' => $writable, 'update_allowed' => update_allowed(),
-            'app_writable' => is_writable(APP_DIR)];
+            'zip' => class_exists('ZipArchive'), 'writable' => $writable, 'update_allowed' => web_update_allowed(),
+            'app_writable' => is_writable(APP_DIR), 'server_save' => $s['server_speichern'],
+            'auto_update' => update_info(), 'settings_error' => $SETTINGS_ERROR];
     }
     if ($p === 'templates') {
         if ($method === 'GET') {
@@ -594,7 +985,32 @@ function route(string $method, string $p)
     if ($p === 'update' && $method === 'POST') {
         return apply_update();
     }
+    if ($p === 'update/jetzt' && $method === 'POST') {
+        if (!web_update_allowed()) {
+            throw new HttpError(403, 'Updates über den Browser sind abgeschaltet (einstellungen.ini: web_update = false).');
+        }
+        $r = auto_update(true, 'Browser');
+        if ($r['status'] === 'fehler') {
+            throw new HttpError(502, $r['text']);
+        }
+        return $r;
+    }
+    if ($p === 'autoupdate') {
+        return auto_update();
+    }
     throw new HttpError(404, 'Unbekannte Adresse.');
+}
+
+// Kommandozeile (z. B. Aufgabenplaner): php api.php autoupdate [--jetzt]
+if (PHP_SAPI === 'cli') {
+    $args = array_slice($argv ?? [], 1);
+    if (($args[0] ?? '') !== 'autoupdate') {
+        fwrite(STDERR, "Aufruf: php api.php autoupdate [--jetzt]\n");
+        exit(2);
+    }
+    $r = auto_update(in_array('--jetzt', $args, true), 'Kommandozeile');
+    echo json_encode($r, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "\n";
+    exit($r['status'] === 'fehler' ? 1 : 0);
 }
 
 try {

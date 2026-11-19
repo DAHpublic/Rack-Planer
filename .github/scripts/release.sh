@@ -7,7 +7,7 @@ v="$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' rackcore/version.py)"
 tag="v$v"
 notes="**Desktop-Version (Windows):** \`Rack-Planer_v$v.exe\` herunterladen und starten – keine Installation nötig.
 
-**Webversion:** \`Rack-Planer-Web_v$v.zip\` für die Synology (Web Station) oder jeden Webserver mit PHP 7.4+ – Ordner \`rack-planer\` kopieren, fertig ([Anleitung](https://github.com/$GITHUB_REPOSITORY/blob/main/web/SYNOLOGY.md)). Update einer bestehenden Installation: im Rack-Planer Hilfe → Programm aktualisieren und das ZIP auswählen.
+**Webversion:** \`Rack-Planer-Web_v$v.zip\` für die Synology (Web Station) oder jeden Webserver mit PHP 7.4+ – Ordner \`rack-planer\` kopieren, fertig ([Anleitung](https://github.com/$GITHUB_REPOSITORY/blob/main/web/SYNOLOGY.md)). Ab 2.06 aktualisiert sich eine bestehende Installation nachts selbst (Einstellungen in \`einstellungen.ini\`, die Updates nie überschreiben).
 
 Die EXE ist noch nicht digital signiert; Windows SmartScreen kann beim ersten Start warnen."
 if ! gh release view "$tag" >/dev/null 2>&1; then

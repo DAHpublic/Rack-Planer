@@ -79,7 +79,7 @@ def test_starts_in_2d_and_switches_views(app):
 def _check_start_and_switch(win):
     assert not win.is_3d and win.stack.currentWidget() is win.view
     assert win.act_front.isChecked() and win.cb_profile.isEnabled()
-    assert win.windowTitle().endswith("Rack-Planer 2.05 (Desktop-Version)")
+    assert win.windowTitle().endswith("Rack-Planer 2.06 (Desktop-Version)")
     # Leiste: Vorderseite | Rückseite | 3D
     acts = win.toolbar.actions()
     assert acts.index(win.act_front) < acts.index(win.act_rear) < acts.index(win.act_3d)
@@ -322,7 +322,7 @@ def test_profile_holes_for_every_unit(app):
 def test_unified_version(win):
     from rackcore.version import APP_VERSION
     import planer2d
-    assert APP_VERSION == "2.05" == planer2d.APP_VERSION
+    assert APP_VERSION == "2.06" == planer2d.APP_VERSION
     assert planer2d.EDITION == "Desktop-Version"
 
 

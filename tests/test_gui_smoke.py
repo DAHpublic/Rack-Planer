@@ -164,7 +164,7 @@ def test_license_dialog_shows_all_texts(app):
 
 
 def test_profile_checkbox_and_title(win, app):
-    assert win.windowTitle().endswith("Rack-Planer 2.05 (Desktop-Version)")
+    assert win.windowTitle().endswith("Rack-Planer 2.06 (Desktop-Version)")
     cb = win.cb_profile
     assert cb.isChecked() and win.view.show_profile
     cb.setChecked(False)
