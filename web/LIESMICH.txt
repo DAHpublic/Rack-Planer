@@ -1,0 +1,37 @@
+Rack-Planer __V__ – Webversion (HTML/PHP)
+=========================================
+
+Läuft auf jedem Webserver mit PHP 7.4 oder neuer, z. B. der Web Station einer Synology.
+Keine Datenbank, kein Docker. Gerechnet und gezeichnet wird im Browser; der Server
+speichert nur.
+
+Einrichten
+----------
+1. Den Ordner „rack-planer“ auf den Webserver kopieren (Synology: in den Ordner „web“).
+2. Dem Webserver Schreibrechte auf den Ordner geben (Synology: Gruppe „http“ → Lesen/Schreiben).
+3. Im Browser öffnen: http://<server>/rack-planer/
+Ausführliche Anleitung für die Synology: SYNOLOGY.md im Repository (web/SYNOLOGY.md).
+
+Daten
+-----
+  daten/schraenke/<id>.rack.json   je Schrank eine Projektdatei (inkl. Historie) – dasselbe
+                                   Format wie die Desktop-Version, lässt sich dort öffnen
+  daten/eigene-vorlagen.json       im Browser gespeicherte Vorlagen
+Der Ordner „daten“ entsteht beim ersten Speichern. Zum Sichern genügt es, ihn zu kopieren.
+
+Update
+------
+Im Rack-Planer: Hilfe → Programm aktualisieren … → neue Rack-Planer-Web_v….zip auswählen.
+Programm und mitgelieferte Vorlagen werden ersetzt, „daten“ bleibt unverändert.
+Von Hand geht es auch: Inhalt des neuen ZIP über den Ordner kopieren (Dateien ersetzen),
+„daten“ nicht löschen.
+
+Vorlagen
+--------
+Die mitgelieferten Gerätevorlagen stehen in vorlagen.json (eine Zeile je Vorlage, gleiche
+Datei wie in der Desktop-Version) und kommen mit jedem Update neu. Eigene Vorlagen legt man
+im Programm an („Als Vorlage speichern“); sie liegen in daten/ und bleiben bei Updates erhalten.
+
+Einstellungen (optional)
+------------------------
+daten/einstellungen.json mit {"update_erlaubt": false} schaltet das Update über den Browser ab.

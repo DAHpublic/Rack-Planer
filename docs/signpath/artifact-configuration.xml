@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Artifact-Konfiguration für SignPath, Desktop-Version 2D (Slug: desktop-2d).
+  Im SignPath-Projekt unter "Artifact Configurations" einfügen.
+  GitHub verpackt das hochgeladene Artefakt als ZIP, darin liegt die EXE.
+  product-name ist eine Metadaten-Vorgabe der SignPath Foundation: Die EXE muss in den
+  Dateieigenschaften den Produktnamen "Rack-Planer" tragen (setzt build.py).
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Rack-Planer_v*.exe" product-name="Rack-Planer">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

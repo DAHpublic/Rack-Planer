@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rack-Planer</title>
+<link rel="icon" href="app/rack.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app/app.css?v=__V__">
+</head>
+<body>
+<header class="toolbar" id="toolbar">
+  <button class="tb" data-act="open" title="Gespeicherte Schränke anzeigen und öffnen (Strg + O)">Schränke …</button>
+  <button class="tb" data-act="new" title="Neuer Schrank">Neu</button>
+  <button class="tb menu" data-menu="save" id="tb-save" title="Speichern (Strg + S)">Speichern</button>
+  <span class="sep"></span>
+  <button class="tb menu" data-menu="export" id="tb-export" title="Als PDF oder Bild exportieren">Exportieren</button>
+  <span class="sep"></span>
+  <button class="tb" data-act="undo" id="tb-undo" title="Rückgängig (Strg + Z)">Rückgängig</button>
+  <button class="tb" data-act="redo" id="tb-redo" title="Wiederholen (Strg + Y)">Wiederholen</button>
+  <span class="sep"></span>
+  <button class="tb" data-act="front" id="tb-front" title="Vorderseite anzeigen (Strg + R wechselt)">Vorderseite</button>
+  <button class="tb" data-act="rear" id="tb-rear" title="Rückseite anzeigen (Strg + R wechselt)">Rückseite</button>
+  <button class="tb" data-act="view3d" id="tb-3d" title="Frei drehbare 3D-Ansicht (Strg + 3)">3D</button>
+  <label class="check tb-check" id="tb-profile" title="Seitenansicht mit der Tiefe rechts neben dem Schrank ein-/ausblenden"><input type="checkbox" id="cb-profile" checked> Seitenansicht</label>
+  <span class="sep"></span>
+  <button class="tb menu" data-menu="view">Ansicht</button>
+  <button class="tb menu" data-menu="help">Hilfe</button>
+  <span class="spacer"></span>
+  <span class="doc-title" id="doc-title"></span>
+</header>
+
+<main class="layout">
+  <aside class="panel" id="left-panel">
+    <section class="group" id="rack-box">
+      <span class="legend">Schrank</span>
+      <div class="form">
+        <label for="r-name">Bezeichnung:</label>
+        <input type="text" id="r-name" maxlength="200" autocomplete="off">
+        <label for="r-height">Höhe:</label>
+        <span class="unit" data-unit="HE"><input type="number" id="r-height" min="1" max="60" step="1"></span>
+        <span class="lbl">Standard:</span>
+        <div class="presets" id="r-height-presets"></div>
+        <label for="r-depth">Tiefe:</label>
+        <span class="unit" data-unit="mm"><input type="number" id="r-depth" min="100" max="2000" step="50"
+          title="Nutzbare Einbautiefe von der vorderen Montageebene bis zur Rückseite. Geräte vorne und hinten teilen sich diese Tiefe: 800 mm Schrank mit einer 50 mm tiefen Steckdosenleiste hinten lässt vorne noch 750 mm frei."></span>
+        <span class="lbl">Tiefe (cm):</span>
+        <div class="presets" id="r-depth-presets"></div>
+        <label for="r-asof">Stand:</label>
+        <div class="row"><input type="date" id="r-asof" class="grow" title="Aktueller Stand der Planung – erscheint auf Exporten unter dem Titel. Neue Schränke: Erstellungsdatum."><button class="btn" id="r-today">Heute</button></div>
+        <span></span>
+        <label class="check" title="Geräte lassen sich in Schritten von ⅓ HE verschieben"><input type="checkbox" id="r-fine"> Feinraster ⅓ HE (jedes Schraubenloch)</label>
+      </div>
+    </section>
+    <section class="group grow" id="tpl-box">
+      <span class="legend">Vorlagen</span>
+      <input type="search" id="tpl-search" placeholder="Suchen, z. B. 7590, LWL, Switch …" title="Filtert die Vorlagen. Enter fügt die markierte Vorlage hinzu." autocomplete="off">
+      <div class="hint" id="tpl-none" hidden>Keine passende Vorlage gefunden.</div>
+      <div class="tpl-tree" id="tpl-tree" tabindex="0"></div>
+      <button class="btn" id="tpl-add">Vorlage hinzufügen</button>
+      <div class="row" style="margin-top:6px"><button class="btn grow" id="add-custom">Eigenes Gerät …</button><button class="btn grow" id="add-shelf">Fachboden</button></div>
+      <div class="hint small-text" style="margin-top:6px"><span class="warn-text">Orange</span> = nicht rackfähig, wird auf einen Fachboden gestellt und lässt sich dort frei per Drag &amp; Drop verschieben</div>
+    </section>
+  </aside>
+
+  <section class="center">
+    <div class="banners" id="banners"></div>
+    <div class="viewwrap" id="viewwrap">
+      <div id="rackview"></div>
+      <div id="view3d" hidden></div>
+      <div class="loading" id="loading">Lade …</div>
+      <div class="zoombar">
+        <button class="btn" data-act="zoom-out" title="Verkleinern">−</button>
+        <button class="btn" data-act="fit" title="Anpassen (Strg + 0)">Anpassen</button>
+        <button class="btn" data-act="zoom-in" title="Vergrößern (Strg + Mausrad)">+</button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel" id="right-panel">
+    <div class="tabs" id="list-box">
+      <div class="tabbar">
+        <button data-tab="list" class="on">Geräte im Schrank</button>
+        <button data-tab="history" id="tab-history">Historie</button>
+      </div>
+      <div class="tabpage" id="page-list">
+        <div class="list">
+          <table class="devlist">
+            <colgroup><col><col style="width:46px"><col style="width:52px"><col style="width:34%"><col style="width:44px"></colgroup>
+            <thead><tr><th>Gerät</th><th>HE</th><th>Seite</th><th>IP-Adresse</th><th class="num">W</th></tr></thead>
+            <tbody id="devlist"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="tabpage" id="page-history" hidden>
+        <label class="check" title="Beim Speichern bleibt der bisherige Stand im selben Schrank erhalten."><input type="checkbox" id="hist-on"> Historie für diesen Schrank führen</label>
+        <div class="hint" id="hist-info"></div>
+        <div class="list" id="hist-list"></div>
+        <div class="row">
+          <button class="btn grow" id="hist-restore" title="Diesen Stand als aktuellen Stand übernehmen (Strg + Z macht es rückgängig)">Wiederherstellen</button>
+          <button class="btn grow" id="hist-copy" title="Diesen Stand als eigene Projektdatei herunterladen">Als eigene Datei …</button>
+          <button class="btn grow" id="hist-new" title="Diesen Stand als neuen Schrank auf dem Server anlegen">Als neuer Schrank</button>
+        </div>
+      </div>
+    </div>
+
+    <section class="group props disabled" id="props">
+      <span class="legend">Eigenschaften</span>
+      <div class="props-scroll">
+      <div class="form">
+        <label for="p-name">Gerätename:</label>
+        <input type="text" id="p-name" maxlength="200" autocomplete="off">
+        <span></span>
+        <label class="check"><input type="checkbox" id="p-show-name"> Namen in der Grafik anzeigen</label>
+        <span class="lbl">IP-Adresse(n):</span>
+        <div class="ipbox" id="p-ips">
+          <input type="text" id="p-ip" placeholder="z. B. 192.168.178.1" autocomplete="off">
+        </div>
+        <span class="lbl">Modell:</span>
+        <span id="p-model">–</span>
+        <label for="p-cat">Kategorie:</label>
+        <select id="p-cat"></select>
+        <label for="p-height">Höhe:</label>
+        <span class="unit" data-unit="HE"><input type="number" id="p-height" min="1" max="60" step="1"></span>
+        <label for="p-height-cm">Höhe (cm):</label>
+        <span class="unit" data-unit="cm"><input type="number" id="p-height-cm" min="0.5" max="250" step="0.5"></span>
+        <label for="p-pos">Position:</label>
+        <span class="unit prefix" data-unit="ab HE"><input type="number" id="p-pos" min="1" max="60" step="1"></span>
+        <label for="p-width">Breite:</label>
+        <span class="unit" data-unit="mm"><input type="number" id="p-width" min="20" max="450" step="1"></span>
+        <label for="p-offset">Auf Fachboden:</label>
+        <span class="unit" data-unit="mm von links"><input type="number" id="p-offset" min="0" max="450" step="5"></span>
+        <label for="p-power">Leistung:</label>
+        <span class="unit" data-unit="W"><input type="number" id="p-power" min="0" max="10000" step="1"></span>
+        <label for="p-side">Montage:</label>
+        <select id="p-side" title="Seite, an der das Gerät montiert ist. Von dort aus belegt es seine Tiefe.">
+          <option value="front">Vorderseite</option><option value="rear">Rückseite</option>
+        </select>
+        <label for="p-depth">Tiefe:</label>
+        <span class="unit" data-unit="mm"><input type="number" id="p-depth" min="0" max="2000" step="10" title="0 = unbekannt"></span>
+        <span></span>
+        <label class="check" title="Schienen werden vorne und hinten am Rahmen befestigt und blockieren diese HE auf der Gegenseite (typisch für USV, Server, Rack-NAS)."><input type="checkbox" id="p-rails"> Auf Einbauschienen</label>
+        <span></span>
+        <div class="small-text" id="p-depth-info"></div>
+        <span class="lbl">Einbau:</span>
+        <span id="p-mount"></span>
+        <button class="btn full" id="p-shelf-btn" hidden>Auf Fachboden stellen</button>
+        <div class="actions full">
+          <button class="btn" id="p-up">▲ Hoch</button>
+          <button class="btn" id="p-down">▼ Runter</button>
+          <button class="btn danger" id="p-del" title="Entfernen (Entf)">Entfernen</button>
+        </div>
+        <button class="btn full" id="p-save-tpl" title="Dieses Gerät als eigene Vorlage speichern – steht danach allen im Netzwerk zur Verfügung">Als Vorlage speichern</button>
+      </div>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<footer class="statusbar">
+  <span class="msg" id="status-msg"></span>
+  <span class="stat" id="status"></span>
+</footer>
+
+<input type="file" id="file-input" accept=".json,application/json" hidden>
+<noscript><p style="padding:20px">Der Rack-Planer braucht JavaScript.</p></noscript>
+<script src="app/lib/jspdf.umd.min.js"></script>
+<script src="app/lib/svg2pdf.umd.min.js"></script>
+<script src="app/core.js?v=__V__"></script>
+<script src="app/textfit.js?v=__V__"></script>
+<script src="app/render.js?v=__V__"></script>
+<script src="app/engine.js?v=__V__"></script>
+<script src="app/export.js?v=__V__"></script>
+<script src="app/local-api.js?v=__V__"></script>
+<script src="app/view3d.js?v=__V__"></script>
+<script src="app/app.js?v=__V__"></script>
+</body>
+</html>

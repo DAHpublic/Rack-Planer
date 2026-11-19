@@ -1,0 +1,111 @@
+name: Webversion (HTML/PHP)
+
+# Testet die Webversion (Rechenkern gegen rackcore, Browsertest mit PHP) und baut die ZIPs:
+#   Rack-Planer-Web_v<V>.zip            für die Synology (Web Station) bzw. jeden PHP-Webserver
+#   Rack-Planer-Web-portabel_v<V>.zip   Windows ohne Installation (mit PHP, Start per .bat)
+# Auf main (und beim manuellen Start) kommen beide in das Release „v<Version>“ (zusammen mit der EXE).
+on:
+  push:
+    paths: ["web/**", "rackcore/**", "tests/**", ".github/workflows/web.yml", ".github/scripts/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "7.4"          # älteste unterstützte Version – läuft dann auch mit 8.x
+          extensions: zip, json
+          tools: none
+      - name: Tests (Kern, Web-Rechenkern gegen rackcore)
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q --ignore=tests/test_gui_smoke.py --ignore=tests/test_view3d.py
+      - name: PHP-Syntax
+        run: php -l web/api.php
+      - name: ZIP bauen
+        run: python web/build_web.py
+      - name: Browsertest (entpacktes ZIP mit PHP-Server)
+        run: |
+          npm install --no-save --no-package-lock playwright@1.49.1
+          npx playwright install --with-deps chromium
+          mkdir -p "$RUNNER_TEMP/srv" "$RUNNER_TEMP/shots"
+          unzip -q dist/Rack-Planer-Web_v*.zip -d "$RUNNER_TEMP/srv"
+          php -S 127.0.0.1:8099 -t "$RUNNER_TEMP/srv/rack-planer" > "$RUNNER_TEMP/php.log" 2>&1 &
+          sleep 1
+          node tests/e2e/web_e2e.js http://127.0.0.1:8099/ "$(ls dist/Rack-Planer-Web_v*.zip)" "$RUNNER_TEMP/shots"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Webversion-Test
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/php.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rack-Planer-Web
+          path: dist/Rack-Planer-Web_v*.zip
+
+  portable:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PHP für Windows laden (NTS x64)
+        shell: pwsh
+        run: |
+          $url = "https://windows.php.net/downloads/releases/latest/php-8.3-nts-Win32-vs16-x64-latest.zip"
+          Invoke-WebRequest $url -OutFile php.zip -UseBasicParsing
+          Expand-Archive php.zip -DestinationPath php-win
+      - name: ZIPs bauen
+        run: python web/build_web.py --php php-win
+      - name: Version ermitteln
+        id: ver
+        shell: bash
+        run: echo "v=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' rackcore/version.py)" >> "$GITHUB_OUTPUT"
+      - name: Portable Version testen (entpackt, mit Leerzeichen im Pfad)
+        shell: pwsh
+        run: |
+          $name = "Rack-Planer-Web-portabel_v${{ steps.ver.outputs.v }}"
+          Expand-Archive "dist\$name.zip" -DestinationPath "$env:RUNNER_TEMP\Test Ordner"
+          $dir = "$env:RUNNER_TEMP\Test Ordner\$name"
+          $p = Start-Process "$dir\php\php.exe" -ArgumentList "-c", "`"$dir\php\php.ini`"", "-S", "127.0.0.1:8091", "-t", "`"$dir\rack-planer`"" -PassThru
+          Start-Sleep 2
+          $info = Invoke-RestMethod "http://127.0.0.1:8091/api.php?p=info"
+          if (-not $info.ok) { throw "api.php antwortet nicht" }
+          if (-not $info.zip) { throw "PHP-Erweiterung zip fehlt (Update im Browser)" }
+          if (-not ((Invoke-WebRequest http://127.0.0.1:8091/ -UseBasicParsing).Content -match "Rack-Planer")) { throw "Startseite fehlt" }
+          $t = Invoke-RestMethod "http://127.0.0.1:8091/api.php?p=templates"
+          if ($t.Count -lt 50) { throw "Vorlagen fehlen" }
+          $doc = '{"document":{"app":"Rack-Planer","format":2,"name":"Test","height_u":6,"depth_mm":800,"as_of":"2026-11-19","items":[],"history":{"enabled":false,"declined":false,"entries":[]}}}'
+          $rec = Invoke-RestMethod "http://127.0.0.1:8091/api.php?p=racks" -Method Post -ContentType "application/json" -Body $doc
+          if (-not (Test-Path "$dir\rack-planer\daten\schraenke\$($rec.id).rack.json")) { throw "Schrank nicht im Ordner daten" }
+          Stop-Process $p.Id
+          Write-Host "Alles ok: PHP $($info.php), Version $($info.version)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rack-Planer-Web-portabel
+          path: dist/Rack-Planer-Web-portabel_v*.zip
+      - name: An das Release v<Version> hängen
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.ver.outputs.v }}"
+          .github/scripts/release.sh "dist/Rack-Planer-Web_v$v.zip" "dist/Rack-Planer-Web-portabel_v$v.zip"

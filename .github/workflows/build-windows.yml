@@ -1,0 +1,65 @@
+name: Windows-EXE bauen
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# SignPath (kostenloses Code-Signing für Open Source) ist vorbereitet, aber erst aktiv, wenn
+# die Repository-Variable SIGNPATH_ORGANIZATION_ID und das Secret SIGNPATH_API_TOKEN gesetzt
+# sind (Settings → Secrets and variables → Actions). Signiert wird nur bei Tags (v*),
+# also bei Releases. Details: docs/signpath/EINRICHTUNG.md
+# Bei Tags (v*) und beim manuellen Start auf main kommt die EXE in das Release „v<Version>“.
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest        # SignPath verlangt GitHub-gehostete Runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abhängigkeiten installieren
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+      - name: Tests
+        run: python -m pytest -q
+      - name: EXE bauen
+        run: python build.py
+      - name: EXE hochladen (unsigniert)
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rack-Planer-Windows
+          path: dist/Rack-Planer_v*.exe
+
+      - name: Mit SignPath signieren
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Rack-Planer' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG || 'desktop-2d' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600   # Freigabe erfolgt manuell
+          output-artifact-directory: signed
+      - name: Signierte EXE hochladen
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rack-Planer-Windows-signiert
+          path: signed/*.exe
+
+      - name: An das Release v<Version> hängen
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ls signed/*.exe >/dev/null 2>&1; then f=(signed/*.exe); else f=(dist/Rack-Planer_v*.exe); fi
+          .github/scripts/release.sh "${f[@]}"
